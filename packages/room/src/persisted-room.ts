@@ -1,12 +1,15 @@
 import { DEFAULT_CAPTION_LANGUAGE } from '@vkara/youtube';
-import type { Room } from './websocket';
+import type { Participant, Room } from './websocket';
 
 /** Room snapshot persisted in the browser (no `clients`). */
 export type PersistedRoom = Omit<Room, 'clients'>;
 
+/** Display-safe participant view (no extra stripping needed — already safe). */
+export type PersistedParticipant = Participant;
+
 /**
- * Backfill fields missing from older localStorage / Redis payloads so TV recovery
- * and caption UI never read `undefined` arrays or flags.
+ * Backfill missing fields on instances of older localStorage / Redis payloads so TV
+ * recovery, caption, participants and lock UI never read `undefined` arrays or flags.
  */
 export function normalizePersistedRoom(
     room: Partial<PersistedRoom> | null | undefined,
@@ -39,5 +42,31 @@ export function normalizePersistedRoom(
                 : 0,
         lastActivity: typeof room.lastActivity === 'number' ? room.lastActivity : Date.now(),
         creatorId: typeof room.creatorId === 'string' ? room.creatorId : '',
+        locked: Boolean(room.locked),
+        lockedAt: typeof room.lockedAt === 'number' ? room.lockedAt : undefined,
+        lockedBy: typeof room.lockedBy === 'string' ? room.lockedBy : undefined,
+        participants: normalizeParticipants(room.participants),
+        hostDeviceId: typeof room.hostDeviceId === 'string' ? room.hostDeviceId : '',
+        hasPassword: Boolean(room.hasPassword ?? room.password),
     };
+}
+
+function normalizeParticipants(
+    raw: Partial<Record<string, Partial<Participant>>> | undefined,
+): Record<string, Participant> {
+    const out: Record<string, Participant> = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const [key, value] of Object.entries(raw)) {
+        if (!value || typeof value !== 'object' || typeof value.deviceId !== 'string') continue;
+        out[key] = {
+            deviceId: value.deviceId,
+            displayName: typeof value.displayName === 'string' ? value.displayName : value.deviceId,
+            role: value.role === 'host' ? 'host' : 'member',
+            joinedAt: typeof value.joinedAt === 'number' ? value.joinedAt : Date.now(),
+            lastSeen: typeof value.lastSeen === 'number' ? value.lastSeen : Date.now(),
+            connectionIds: Array.isArray(value.connectionIds) ? value.connectionIds : [],
+            isTvConnection: Boolean(value.isTvConnection),
+        };
+    }
+    return out;
 }

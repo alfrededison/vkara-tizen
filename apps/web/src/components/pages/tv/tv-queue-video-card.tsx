@@ -98,7 +98,7 @@ export function TvQueueVideoCard({
             {({ focused }) => (
                 <article
                     data-tv-queue-item={video.id}
-                    className="w-[17rem] md:w-[21rem] lg:w-[23rem] xl:w-[25rem]"
+                    className="w-[13rem] sm:w-[17rem] md:w-[21rem] lg:w-[23rem] xl:w-[25rem]"
                 >
                     <div className={cn('tv-queue-thumb', tvQueueThumbFrame(focused, isNowPlaying))}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}

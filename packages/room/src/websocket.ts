@@ -7,11 +7,32 @@ export interface ClientInfo {
     id: string;
     roomId?: string;
     lastSeen?: number;
+    /** Anonymous device id (set when the join/create message carries one). */
+    deviceId?: string;
+}
+
+export type ClientRole = 'host' | 'member';
+
+export interface Participant {
+    deviceId: string;
+    /** Friendly label: user name, device model (e.g. "Pixel 7"), or coarse fallback ("iPhone", "TV"). */
+    displayName: string;
+    role: ClientRole;
+    /** ms since epoch — used to pick auto-promote host when current host leaves. */
+    joinedAt: number;
+    /** Last time this device was seen connected (updated on join, leave, and heartbeat sweep). */
+    lastSeen: number;
+    /** Active ws.id values for this device (one device may have multiple tabs). */
+    connectionIds: string[];
+    /** True when the connection was reported as a TV client. */
+    isTvConnection: boolean;
 }
 
 export interface Room {
     id: string;
     password?: string;
+    /** Client-safe flag — password plaintext is never broadcast. */
+    hasPassword?: boolean;
     clients: string[];
     videoQueue: YouTubeVideo[];
     historyQueue: YouTubeVideo[];
@@ -36,6 +57,14 @@ export interface Room {
     tiktokPhotoIndex: number;
     /** Highest image index reported by the TV embed for the current photo post. */
     tiktokPhotoMaxIndex: number;
+    /** When true, only devices already in `participants` may join. */
+    locked: boolean;
+    lockedAt?: number;
+    lockedBy?: string;
+    /** deviceId → participant. Source of truth for the participants panel. */
+    participants: Record<string, Participant>;
+    /** Device id of the current host (migratable — moves to the longest-joined member on host leave). */
+    hostDeviceId: string;
 }
 
 export type MessageBase = Pick<ClientMessage, 'id' | 'timestamp'>;
@@ -57,6 +86,8 @@ export type ServerMessage =
     | { type: 'error'; message: string }
     | { type: 'errorWithCode'; code: ErrorCode; message?: string }
     | { type: 'roomClosed'; reason: string }
+    | { type: 'youAreHost' }
+    | { type: 'kicked'; reason: string }
     | { type: 'replay' }
     | { type: 'play' }
     | { type: 'pause' }

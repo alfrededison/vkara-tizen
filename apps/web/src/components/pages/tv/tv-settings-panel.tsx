@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { setFocus } from '@noriginmedia/norigin-spatial-navigation-core';
-import { Check, ChevronDown, DoorClosed, Languages, LogOut, QrCode, X } from 'lucide-react';
+import {
+    Check,
+    ChevronDown,
+    DoorClosed,
+    Languages,
+    Lock,
+    LockOpen,
+    LogOut,
+    QrCode,
+    X,
+} from 'lucide-react';
 
 import { useChangeLocale } from '@/hooks/use-change-locale';
 import { useWebSocket } from '@/providers/websocket-provider';
@@ -21,6 +31,8 @@ import { cn } from '@/lib/utils';
 
 import { TvFocusable } from './tv-focusable';
 import { TvSpatialOverlayShell } from './tv-spatial-overlay-shell';
+import { TvParticipantsPanel } from './tv-participants-panel';
+import { getOrCreateDeviceId } from '@/lib/device-id';
 
 type TvSettingsPanelProps = {
     onCloseAction: () => void;
@@ -290,9 +302,16 @@ export function TvSettingsPanel({ onCloseAction }: TvSettingsPanelProps) {
     const wsId = useYouTubeStore((s) => s.wsId);
     const roomId = useYouTubeStore((s) => s.room?.id);
     const roomCreatorId = useYouTubeStore((s) => s.room?.creatorId);
+    const roomLocked = useYouTubeStore((s) => s.room?.locked ?? false);
+    const hostDeviceId = useYouTubeStore((s) => s.room?.hostDeviceId);
+    const participants = useYouTubeStore((s) => s.room?.participants);
     const showQRInPlayer = useYouTubeStore((s) => s.room?.showQRInPlayer ?? true);
     const enterTvLobby = useYouTubeStore((s) => s.enterTvLobby);
     const { ensureConnectedAndSend } = useWebSocket();
+    const myDeviceId = getOrCreateDeviceId();
+    const isHost =
+        Boolean(myDeviceId) &&
+        (hostDeviceId === myDeviceId || participants?.[myDeviceId ?? '']?.role === 'host');
 
     const leaveRoom = useCallback(() => {
         if (!roomId) {
@@ -329,6 +348,22 @@ export function TvSettingsPanel({ onCloseAction }: TvSettingsPanelProps) {
         [roomId, ensureConnectedAndSend, t],
     );
 
+    const toggleLock = useCallback(() => {
+        if (!roomId) {
+            toastSessionNotReady({
+                title: t('toast.sessionNotReady'),
+                description: t('toast.sessionNotReadyDescription'),
+            });
+            return;
+        }
+        if (roomLocked) {
+            ensureConnectedAndSend({ type: 'unlockRoom' });
+            return;
+        }
+        if (!isHost) return;
+        ensureConnectedAndSend({ type: 'lockRoom' });
+    }, [roomId, roomLocked, isHost, ensureConnectedAndSend, t]);
+
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const handleUpPeekScroll = useCallback((direction: string) => {
@@ -348,8 +383,8 @@ export function TvSettingsPanel({ onCloseAction }: TvSettingsPanelProps) {
     }
 
     return (
-        <div className="tv-settings-rail absolute inset-y-0 right-0 z-40 flex min-h-0 w-full max-w-[22rem] flex-col shadow-[-16px_0_48px_rgb(0_0_0_0.35)] sm:max-w-md xl:max-w-lg">
-            <header className="tv-settings-header shrink-0 px-6 pt-8 md:px-7 md:pt-9">
+        <div className="tv-settings-rail absolute inset-y-0 right-0 z-40 flex min-h-0 w-full max-w-[18rem] flex-col shadow-[-16px_0_48px_rgb(0_0_0_0.35)] sm:max-w-[22rem] md:max-w-md xl:max-w-lg">
+            <header className="tv-settings-header shrink-0 px-4 pt-5 sm:px-6 sm:pt-8 md:px-7 md:pt-9">
                 <h1 className="tv-settings-panel-title">{tTv('settings')}</h1>
             </header>
 
@@ -358,7 +393,7 @@ export function TvSettingsPanel({ onCloseAction }: TvSettingsPanelProps) {
                 preferredChildFocusKey={TV_FOCUS_KEYS.settingsQrToggle}
                 trapFocus
                 containerRef={scrollRef}
-                className="tv-settings-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-6 pb-8 md:px-7 md:pb-9"
+                className="tv-settings-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-4 pb-6 sm:px-6 sm:pb-8 md:px-7 md:pb-9"
                 aria-label={tTv('settings')}
             >
                 <div className="flex w-full flex-col gap-8">
@@ -381,6 +416,27 @@ export function TvSettingsPanel({ onCloseAction }: TvSettingsPanelProps) {
                             { value: 'hide', label: tRoom('hide') },
                         ]}
                         onChangeAction={(next) => handleShowQrChange(next === 'show')}
+                    />
+
+                    {roomLocked || isHost ? (
+                        <SettingsRow
+                            {...scrollProps}
+                            focusKey={TV_FOCUS_KEYS.settingsLock}
+                            label={roomLocked ? tRoom('unlockRoom') : tRoom('lockRoom')}
+                            icon={
+                                roomLocked ? (
+                                    <LockOpen className="h-6 w-6" strokeWidth={2.5} />
+                                ) : (
+                                    <Lock className="h-6 w-6" strokeWidth={2.5} />
+                                )
+                            }
+                            onEnterPress={toggleLock}
+                        />
+                    ) : null}
+
+                    <TvParticipantsPanel
+                        scrollContainerRef={scrollRef}
+                        peekScrollUpOnUp={!(roomLocked || isHost)}
                     />
 
                     <SettingsDropdown

@@ -112,4 +112,21 @@ describe('cleanUpRoomField', () => {
         expect(cleaned.playingNow?.channels[0]?.name).toBe('Legacy');
         expect(cleaned.videoQueue[0]?.channels[0]?.name).toBe('Legacy');
     });
+
+    it('omits password from client payloads', () => {
+        const room = createTestRoom({
+            id: '1234',
+            password: 'secret',
+        });
+
+        const cleaned = cleanUpRoomField(room);
+
+        expect(cleaned).not.toHaveProperty('password');
+        expect(cleaned.hasPassword).toBe(true);
+    });
+
+    it('sets hasPassword false when room has no password', () => {
+        const cleaned = cleanUpRoomField(createTestRoom({ id: '1234' }));
+        expect(cleaned.hasPassword).toBe(false);
+    });
 });

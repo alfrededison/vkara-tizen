@@ -20,6 +20,9 @@ export function createTestPersistedRoom(overrides: Partial<PersistedRoom> = {}):
         currentTime: 0,
         tiktokPhotoIndex: 0,
         tiktokPhotoMaxIndex: 0,
+        locked: false,
+        participants: {},
+        hostDeviceId: '',
         ...overrides,
     };
 }

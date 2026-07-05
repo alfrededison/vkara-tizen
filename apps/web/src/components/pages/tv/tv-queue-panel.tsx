@@ -58,8 +58,8 @@ export function TvQueuePanel({
             trapFocus={false}
             onMountFocus={!embedded && allItems.length > 0}
             className={cn(
-                'tv-queue-panel shrink-0 px-8 pt-4 md:px-12 lg:px-16',
-                embedded ? 'pb-2' : 'pb-8 pt-5',
+                'tv-queue-panel shrink-0 px-4 pt-3 sm:px-8 sm:pt-4 md:px-12 lg:px-16',
+                embedded ? 'pb-2' : 'pb-6 pt-4 sm:pb-8 sm:pt-5',
                 embedded && 'tv-queue-panel--embedded',
                 embedded && (expanded ? 'tv-queue-panel--expanded' : 'tv-queue-panel--peek'),
                 !embedded &&
@@ -82,7 +82,7 @@ export function TvQueuePanel({
             {allItems.length === 0 ? (
                 <p className="py-4 text-center text-base text-zinc-500">{t('queueEmpty')}</p>
             ) : (
-                <div className="tv-queue-track flex snap-x snap-mandatory snap-always gap-5 overflow-x-auto px-0.5 pb-2 pt-0.5 md:gap-7 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <div className="tv-queue-track flex snap-x snap-mandatory snap-always gap-3 overflow-x-auto px-0.5 pb-2 pt-0.5 sm:gap-5 md:gap-7 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {allItems.map((video) => (
                         <TvQueueVideoCard
                             key={video.id}

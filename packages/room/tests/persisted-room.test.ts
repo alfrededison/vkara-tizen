@@ -33,8 +33,35 @@ describe('normalizePersistedRoom', () => {
             tiktokPhotoIndex: 0,
             tiktokPhotoMaxIndex: 0,
             creatorId: '',
+            locked: false,
+            participants: {},
+            hostDeviceId: '',
         });
         expect(normalized?.lastActivity).toEqual(expect.any(Number));
+    });
+
+    it('backfills participants and lock fields for legacy payloads', () => {
+        const normalized = normalizePersistedRoom({
+            id: '1234',
+            participants: {
+                d1: {
+                    deviceId: 'd1',
+                    displayName: 'Remote #1',
+                    role: 'host',
+                    joinedAt: 1,
+                    lastSeen: 2,
+                    connectionIds: ['ws1'],
+                    isTvConnection: false,
+                },
+            },
+            locked: true,
+            hostDeviceId: 'd1',
+        });
+
+        expect(normalized?.locked).toBe(true);
+        expect(normalized?.hostDeviceId).toBe('d1');
+        expect(normalized?.participants.d1?.role).toBe('host');
+        expect(normalized?.participants.d1?.connectionIds).toEqual(['ws1']);
     });
 
     it('clamps volume to 0–100 and preserves explicit fields', () => {

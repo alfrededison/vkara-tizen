@@ -11,12 +11,14 @@ import {
     acceptSyncPlaybackPositionTime,
     type PlaybackTimeSyncState,
     type ClientInfo,
+    type Participant,
     type Room,
     type ServerMessage,
 } from '@vkara/room';
 import { isValidRoomId, ROOM_ID_LENGTH } from '@vkara/room';
 import type { ClientMessage, TvRoomRestoreState } from '@vkara/validators/ws/client-message';
 import { applyTvRestoreToRoom } from '@/modules/room/apply-tv-restore';
+import { canJoinWhenLocked } from '@/modules/room/participant-policy';
 import { publishToRoom } from '@/modules/room/room-broadcast';
 import { resolvePlaylistDetails } from '@/modules/youtube/fetch-playlist-details-cached';
 import {
@@ -26,11 +28,146 @@ import {
 import { resolveNextEmbeddableFromQueue } from '@/modules/youtube/resolve-embeddable-queue';
 import { mergeQueueAfterAdvance } from '@/modules/room/merge-queue-after-advance';
 import { redis } from '@/redis';
-import { isVideoAlreadyInRoom, mutateRoom, requireRoom, writeRoom } from '@/utils/room-store';
+import {
+    isVideoAlreadyInRoom,
+    loadRoom,
+    mutateRoom,
+    requireRoom,
+    writeRoom,
+} from '@/utils/room-store';
 
 const serviceLogger = createContextLogger('RoomService');
 
 const MAX_CAPTION_TRACKS = 64;
+/** Mirrors `displayName` max length in packages/validators/src/ws/client-message.ts. */
+const MAX_DISPLAY_NAME_LENGTH = 40;
+
+/**
+ * Per-connection scratchpad we attach to the underlying ElysiaWS instance so we can
+ * resolve the deviceId from any handler without threading it through every signature.
+ */
+interface WsDeviceState {
+    deviceId: string;
+    isTvConnection: boolean;
+    displayName?: string;
+}
+
+function getWsDeviceState(ws: ElysiaWS): WsDeviceState | undefined {
+    return (ws as unknown as { __vkaraDevice?: WsDeviceState }).__vkaraDevice;
+}
+
+function setWsDeviceState(ws: ElysiaWS, state: WsDeviceState): void {
+    (ws as unknown as { __vkaraDevice?: WsDeviceState }).__vkaraDevice = state;
+}
+
+function resolveDeviceId(ws: ElysiaWS, incoming?: string): string {
+    const existing = getWsDeviceState(ws);
+    if (existing) return existing.deviceId;
+    const deviceId = incoming && incoming.length > 0 ? incoming : `anon-${ws.id}`;
+    return deviceId;
+}
+
+function makeDisplayName(isTvConnection: boolean, index: number): string {
+    if (isTvConnection) return 'TV';
+    // Prefer client-sent labels (model / user name). This is only a last-resort fallback.
+    return `Remote #${Math.max(1, index)}`;
+}
+
+/**
+ * Normalize a client-supplied display name: trim, cap length, fall back when empty.
+ * Mirrors the runtime guard in `setDisplayName` so create/join/rejoin can never
+ * store whitespace-only or oversized names (defense in depth before the WS schema).
+ */
+function sanitizeDisplayName(value: string | undefined, fallback: string): string {
+    const trimmed = value?.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
+    return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function upsertParticipant(
+    room: Room,
+    deviceId: string,
+    wsId: string,
+    isTvClient: boolean,
+    displayName?: string,
+): Participant {
+    const existing = room.participants[deviceId];
+
+    if (existing) {
+        if (!existing.connectionIds.includes(wsId)) {
+            existing.connectionIds.push(wsId);
+        }
+        existing.lastSeen = Date.now();
+        if (isTvClient && !existing.isTvConnection) {
+            existing.isTvConnection = true;
+            existing.displayName = existing.displayName || 'TV';
+        }
+        const next = displayName
+            ? sanitizeDisplayName(displayName, existing.displayName)
+            : undefined;
+        if (next) {
+            existing.displayName = next;
+        }
+        return existing;
+    }
+
+    const remoteCount = Object.values(room.participants).filter((p) => !p.isTvConnection).length;
+    const participant: Participant = {
+        deviceId,
+        displayName: sanitizeDisplayName(displayName, makeDisplayName(isTvClient, remoteCount + 1)),
+        role: 'member',
+        joinedAt: Date.now(),
+        lastSeen: Date.now(),
+        connectionIds: [wsId],
+        isTvConnection: isTvClient,
+    };
+    room.participants[deviceId] = participant;
+    return participant;
+}
+
+function pruneConnectionFromParticipant(participant: Participant | undefined, wsId: string): void {
+    if (!participant) return;
+    participant.connectionIds = participant.connectionIds.filter((id) => id !== wsId);
+    participant.lastSeen = Date.now();
+}
+
+/**
+ * Co-host helper: any participant whose `role === 'host'` can drive the room
+ * (lock/unlock/closeRoom/queue control). `room.hostDeviceId` is just the
+ * primary host used for sorting and legacy single-host code paths.
+ */
+function requireHost(room: Room, actorDeviceId: string): Participant {
+    const actor = room.participants[actorDeviceId];
+    if (!actor || actor.role !== 'host') {
+        throw new RoomError(ErrorCode.NOT_HOST);
+    }
+    return actor;
+}
+
+function promoteNewHost(room: Room, excludingDeviceId?: string): Participant | undefined {
+    // Prefer an existing live co-host before falling back to the next member.
+    const existingHost = Object.values(room.participants).find(
+        (p) => p.deviceId !== excludingDeviceId && p.role === 'host' && p.connectionIds.length > 0,
+    );
+    if (existingHost) {
+        room.hostDeviceId = existingHost.deviceId;
+        return existingHost;
+    }
+
+    const candidates = Object.values(room.participants)
+        .filter((p) => p.deviceId !== excludingDeviceId && p.connectionIds.length > 0)
+        .sort((a, b) => a.joinedAt - b.joinedAt);
+    const newHost = candidates[0];
+    if (!newHost) return undefined;
+    room.hostDeviceId = newHost.deviceId;
+    newHost.role = 'host';
+    // Demote only the departed primary host id slot — co-hosts are preserved.
+    Object.values(room.participants).forEach((p) => {
+        if (p.deviceId === excludingDeviceId && p.role === 'host') {
+            p.role = 'member';
+        }
+    });
+    return newHost;
+}
 
 function markCaptionTracksPending(room: Room, videoId: string | null): void {
     room.captionTracks = [];
@@ -66,7 +203,12 @@ function broadcastRoomState(roomId: string, room: Room): void {
 
 async function getClientInfo(wsId: string): Promise<ClientInfo | null> {
     const clientInfo = await redis.hgetall(`client:${wsId}`);
-    return clientInfo.roomId ? { id: wsId, roomId: clientInfo.roomId } : null;
+    if (!clientInfo.roomId) return null;
+    return {
+        id: wsId,
+        roomId: clientInfo.roomId,
+        deviceId: clientInfo.deviceId || undefined,
+    };
 }
 
 async function findRoomIdByClient(ws: ElysiaWS): Promise<string | undefined> {
@@ -93,51 +235,234 @@ const lastPlaybackBroadcastByRoom = new Map<string, PlaybackTimeSyncState>();
 const advanceInFlightByRoom = new Map<string, Promise<void>>();
 
 export function createRoomService({ wsConnections, sendToClient }: RoomServiceDeps) {
-    async function leaveCurrentRoom(ws: ElysiaWS): Promise<string | null> {
+    async function buildClientDeviceIdMap(
+        clientIds: string[],
+        fallbackDeviceId: string,
+    ): Promise<Map<string, string>> {
+        const map = new Map<string, string>();
+        await Promise.all(
+            clientIds.map(async (clientId) => {
+                const fromRedis = await redis.hget(`client:${clientId}`, 'deviceId');
+                const stored = getWsDeviceState(wsConnections.get(clientId) ?? ({} as ElysiaWS));
+                map.set(clientId, fromRedis ?? stored?.deviceId ?? fallbackDeviceId);
+            }),
+        );
+        return map;
+    }
+
+    async function leaveCurrentRoom(
+        ws: ElysiaWS,
+        opts: { removeParticipant?: boolean } = {},
+    ): Promise<string | null> {
         const clientInfo = await getClientInfo(ws.id);
         if (!clientInfo?.roomId) return null;
 
         const { roomId } = clientInfo;
+        const leavingDeviceId =
+            getWsDeviceState(ws)?.deviceId ?? clientInfo.deviceId ?? `anon-${ws.id}`;
+        const removeParticipant = opts.removeParticipant === true;
 
         ws.unsubscribe(roomId);
+
+        // When the user explicitly leaves (vs. an unexpected ws drop) we evict the
+        // whole device from the participant list so it disappears from the panel.
+        // Multi-tab siblings of the same device also lose their seat here; the ws
+        // close handler downstream only prunes the connectionId, keeping the
+        // participant offline so it can reconnect to a locked room (rejoin).
+        const evictedClientIds: string[] = [];
+        const preLeaveRoom = await loadRoom(roomId);
+        const clientDeviceIds = preLeaveRoom
+            ? await buildClientDeviceIdMap(preLeaveRoom.clients, leavingDeviceId)
+            : new Map<string, string>();
         const room = await mutateRoom(roomId, (room) => {
-            room.clients = room.clients.filter((id) => id !== ws.id);
-            if (room.clients.length === 0) {
-                room.emptySince = Date.now();
+            if (removeParticipant) {
+                const affected = room.clients.filter((id) => {
+                    const remoteDeviceId = clientDeviceIds.get(id) ?? leavingDeviceId;
+                    return remoteDeviceId === leavingDeviceId;
+                });
+                evictedClientIds.push(...affected);
+                room.clients = room.clients.filter((id) => !affected.includes(id));
+
+                for (const id of affected) {
+                    const sibling = wsConnections.get(id);
+                    if (sibling) {
+                        sibling.unsubscribe(roomId);
+                    }
+                }
+
+                const leavingParticipant = room.participants[leavingDeviceId];
+                if (room.hostDeviceId === leavingDeviceId) {
+                    promoteNewHost(room, leavingDeviceId);
+                }
+                if (leavingParticipant) {
+                    delete room.participants[leavingDeviceId];
+                }
+                if (room.clients.length === 0) {
+                    room.emptySince = Date.now();
+                }
+            } else {
+                room.clients = room.clients.filter((id) => id !== ws.id);
+                pruneConnectionFromParticipant(room.participants[leavingDeviceId], ws.id);
+                // Auto-promote host when the host device has no live connections left.
+                const wasHost = room.hostDeviceId === leavingDeviceId;
+                const hostParticipant = wasHost ? room.participants[leavingDeviceId] : undefined;
+                if (wasHost && hostParticipant && hostParticipant.connectionIds.length === 0) {
+                    promoteNewHost(room, leavingDeviceId);
+                }
+                if (room.clients.length === 0) {
+                    room.emptySince = Date.now();
+                }
             }
         });
-        await redis.hdel(`client:${ws.id}`, 'roomId');
+
+        if (removeParticipant && evictedClientIds.length > 0) {
+            await Promise.all(
+                evictedClientIds.map((id) => redis.hdel(`client:${id}`, 'roomId', 'deviceId')),
+            );
+        } else {
+            await redis.hdel(`client:${ws.id}`, 'roomId', 'deviceId');
+        }
+
+        if (room.clients.length > 0) {
+            broadcastRoomState(roomId, room);
+            // Notify every live co-host — they need `youAreHost` to drive the UI,
+            // regardless of which ones still hold the primary `hostDeviceId` slot.
+            for (const participant of Object.values(room.participants)) {
+                if (participant.role !== 'host') continue;
+                for (const connectionId of participant.connectionIds) {
+                    const hostWs = wsConnections.get(connectionId);
+                    if (hostWs) {
+                        sendToClient(hostWs, { type: 'youAreHost' });
+                    }
+                }
+            }
+        }
 
         roomLogger.info('Client left room', {
             clientId: ws.id,
             roomId,
             remainingClients: room.clients.length,
+            leftDeviceId: leavingDeviceId,
+            explicit: removeParticipant,
+            evicted: evictedClientIds.length,
+            newHost: room.hostDeviceId,
         });
 
         return roomId;
     }
 
-    async function joinRoomInternal(ws: ElysiaWS, roomId: string) {
-        await leaveCurrentRoom(ws);
-
-        const room = await mutateRoom(roomId, (room) => {
-            if (!room.clients.includes(ws.id)) {
-                room.clients.push(ws.id);
-                delete room.emptySince;
-            } else if (room.emptySince) {
-                delete room.emptySince;
-            }
+    async function joinRoomInternal(
+        ws: ElysiaWS,
+        roomId: string,
+        opts: {
+            deviceId: string;
+            isTvClient: boolean;
+            displayName?: string;
+            isRejoin?: boolean;
+        },
+    ) {
+        // When rejoining the same room we must NOT evict the participant entry —
+        // rejoin is the "I lost my socket and want back in" flow, which relies on
+        // the offline participant surviving so the locked-room check still passes.
+        // Switching to a different room counts as explicitly leaving the old one.
+        const clientInfo = await getClientInfo(ws.id);
+        const leavingSameRoom = opts.isRejoin && clientInfo?.roomId === roomId;
+        await leaveCurrentRoom(ws, {
+            removeParticipant: !leavingSameRoom,
         });
 
+        const room = await mutateRoom(
+            roomId,
+            (room) => {
+                if (!canJoinWhenLocked(room, opts.deviceId)) {
+                    throw new RoomError(ErrorCode.ROOM_LOCKED);
+                }
+                if (!room.clients.includes(ws.id)) {
+                    room.clients.push(ws.id);
+                    delete room.emptySince;
+                } else if (room.emptySince) {
+                    delete room.emptySince;
+                }
+                if (opts.deviceId && !room.participants[opts.deviceId]) {
+                    room.participants[opts.deviceId] = {
+                        deviceId: opts.deviceId,
+                        displayName: sanitizeDisplayName(
+                            opts.displayName,
+                            makeDisplayName(
+                                opts.isTvClient,
+                                Object.values(room.participants).filter((p) => !p.isTvConnection)
+                                    .length + 1,
+                            ),
+                        ),
+                        role: 'member',
+                        joinedAt: Date.now(),
+                        lastSeen: Date.now(),
+                        connectionIds: [],
+                        isTvConnection: opts.isTvClient,
+                    };
+                }
+                const participant = upsertParticipant(
+                    room,
+                    opts.deviceId,
+                    ws.id,
+                    opts.isTvClient,
+                    opts.displayName,
+                );
+                // First connection / empty room → becomes host.
+                if (!room.hostDeviceId || !room.participants[room.hostDeviceId]) {
+                    room.hostDeviceId = participant.deviceId;
+                    participant.role = 'host';
+                } else if (opts.isTvClient) {
+                    // TV always reclaims the primary-host slot when it (re)joins, so the
+                    // living-room device leads the room — but it no longer demotes other
+                    // co-hosts (first remote stays a host so they can lock/kick too).
+                    room.hostDeviceId = participant.deviceId;
+                    participant.role = 'host';
+                } else {
+                    // First remote to arrive in a TV-led room becomes a co-host so they
+                    // can coordinate (lock/kick/closeRoom) without fumbling on the TV UI.
+                    const existingHost = room.participants[room.hostDeviceId];
+                    const hasRemoteCoHost = Object.values(room.participants).some(
+                        (p) =>
+                            p.role === 'host' &&
+                            !p.isTvConnection &&
+                            p.deviceId !== participant.deviceId,
+                    );
+                    if (
+                        existingHost?.isTvConnection &&
+                        !hasRemoteCoHost &&
+                        participant.role !== 'host'
+                    ) {
+                        participant.role = 'host';
+                    }
+                }
+            },
+            { isRejoin: opts.isRejoin },
+        );
+
         ws.subscribe(roomId);
-        await redis.hset(`client:${ws.id}`, 'roomId', roomId);
+        await redis.hset(`client:${ws.id}`, 'roomId', roomId, 'deviceId', opts.deviceId);
+        setWsDeviceState(ws, {
+            deviceId: opts.deviceId,
+            isTvConnection: opts.isTvClient,
+            displayName: opts.displayName,
+        });
         sendToClient(ws, { type: 'roomJoined', yourId: ws.id, room: cleanUpRoomField(room) });
+        if (room.hostDeviceId === opts.deviceId) {
+            sendToClient(ws, { type: 'youAreHost' });
+        } else if (room.participants[opts.deviceId]?.role === 'host') {
+            // Co-host (e.g. first remote joining a TV-led room).
+            sendToClient(ws, { type: 'youAreHost' });
+        }
 
         roomLogger.info('Client joined room', {
             clientId: ws.id,
             roomId,
             clientCount: room.clients.length,
             isCreator: room.creatorId === ws.id,
+            deviceId: opts.deviceId,
+            isTvClient: opts.isTvClient,
+            role: room.participants[opts.deviceId]?.role,
         });
     }
 
@@ -177,22 +502,34 @@ export function createRoomService({ wsConnections, sendToClient }: RoomServiceDe
 
     async function createRoom(
         ws: ElysiaWS,
-        password?: string,
-        preferredRoomId?: string,
-        restore?: TvRoomRestoreState,
+        options: {
+            password?: string;
+            preferredRoomId?: string;
+            restore?: TvRoomRestoreState;
+            deviceId?: string;
+            isTvClient?: boolean;
+            displayName?: string;
+        } = {},
     ) {
-        const roomId = await resolveCreateRoomId(restore ? preferredRoomId : undefined, restore);
+        const deviceId = resolveDeviceId(ws, options.deviceId);
+        const isTvClient = options.isTvClient === true;
+        const roomId = await resolveCreateRoomId(
+            options.restore ? options.preferredRoomId : undefined,
+            options.restore,
+        );
 
         roomLogger.info(`Creating new room`, {
             roomId,
             creatorId: ws.id,
-            tvRecovery: Boolean(restore),
-            preferredRoomId: restore ? preferredRoomId : undefined,
+            deviceId,
+            isTvClient,
+            tvRecovery: Boolean(options.restore),
+            preferredRoomId: options.restore ? options.preferredRoomId : undefined,
         });
 
         const room: Room = {
             id: roomId,
-            password: normalizeRoomPassword(password),
+            password: normalizeRoomPassword(options.password),
             clients: [ws.id],
             videoQueue: [],
             historyQueue: [],
@@ -209,39 +546,375 @@ export function createRoomService({ wsConnections, sendToClient }: RoomServiceDe
             currentTime: 0,
             tiktokPhotoIndex: 0,
             tiktokPhotoMaxIndex: 0,
+            locked: false,
+            participants: {},
+            hostDeviceId: deviceId,
         };
 
-        if (restore) {
-            applyTvRestoreToRoom(room, restore);
+        if (options.restore) {
+            applyTvRestoreToRoom(room, options.restore);
         }
 
         await writeRoom(roomId, room);
-        await joinRoomInternal(ws, roomId);
+        await joinRoomInternal(ws, roomId, {
+            deviceId,
+            isTvClient,
+            displayName: options.displayName,
+        });
         sendToClient(ws, { type: 'roomCreated', roomId });
     }
 
-    async function joinRoom(ws: ElysiaWS, roomId: string, password?: string, isRejoin = false) {
+    async function joinRoom(
+        ws: ElysiaWS,
+        roomId: string,
+        options: {
+            password?: string;
+            isRejoin?: boolean;
+            deviceId?: string;
+            isTvClient?: boolean;
+            displayName?: string;
+        } = {},
+    ) {
+        const isRejoin = options.isRejoin === true;
+        const deviceId = resolveDeviceId(ws, options.deviceId);
+        const isTvClient = options.isTvClient === true;
+
         roomLogger.info(isRejoin ? 'Client rejoining room' : 'Client joining room', {
             clientId: ws.id,
             roomId,
             isRejoin,
+            deviceId,
+            isTvClient,
         });
 
         const room = await requireRoom(roomId, isRejoin);
 
         const expectedPassword = normalizeRoomPassword(room.password);
         if (expectedPassword) {
-            const providedPassword = normalizeRoomPassword(password) ?? '';
+            const providedPassword = normalizeRoomPassword(options.password) ?? '';
             if (providedPassword !== expectedPassword) {
                 throw new RoomError(ErrorCode.INCORRECT_PASSWORD);
             }
         }
 
-        await joinRoomInternal(ws, roomId);
+        // Lock only blocks brand-new devices; known participants may reconnect.
+        if (!canJoinWhenLocked(room, deviceId)) {
+            throw new RoomError(ErrorCode.ROOM_LOCKED);
+        }
+
+        await joinRoomInternal(ws, roomId, {
+            deviceId,
+            isTvClient,
+            displayName: options.displayName,
+            isRejoin,
+        });
+
+        // Notify everyone else that participants changed.
+        const updated = await requireRoom(roomId);
+        broadcastRoomState(roomId, updated);
+    }
+
+    async function resolveDeviceIdForWs(ws: ElysiaWS): Promise<string | null> {
+        const fromState = getWsDeviceState(ws)?.deviceId;
+        if (fromState) return fromState;
+        const clientInfo = await getClientInfo(ws.id);
+        return clientInfo?.deviceId ?? null;
+    }
+
+    async function lockRoom(ws: ElysiaWS): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const deviceId = await resolveDeviceIdForWs(ws);
+        if (!deviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            const participant = room.participants[deviceId];
+            if (!participant || participant.role !== 'host') {
+                throw new RoomError(ErrorCode.NOT_HOST);
+            }
+            room.locked = true;
+            room.lockedAt = Date.now();
+            room.lockedBy = deviceId;
+        });
+
+        broadcastRoomState(roomId, room);
+        roomLogger.info('Room locked', { roomId, lockedBy: deviceId });
+    }
+
+    async function unlockRoom(ws: ElysiaWS): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const deviceId = await resolveDeviceIdForWs(ws);
+        if (!deviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            if (!room.participants[deviceId]) {
+                throw new RoomError(ErrorCode.NOT_IN_ROOM);
+            }
+            room.locked = false;
+            delete room.lockedAt;
+            delete room.lockedBy;
+        });
+
+        broadcastRoomState(roomId, room);
+        roomLogger.info('Room unlocked', { roomId, unlockedBy: deviceId });
+    }
+
+    async function claimHost(ws: ElysiaWS): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const deviceId = await resolveDeviceIdForWs(ws);
+        if (!deviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            const participant = room.participants[deviceId];
+            if (!participant) {
+                throw new RoomError(ErrorCode.NOT_IN_ROOM);
+            }
+            // Co-host model: claiming makes this device a host alongside any
+            // existing hosts. TV joins still take the primary `hostDeviceId` slot,
+            // but remotes are not demoted when a TV reappears.
+            if (participant.isTvConnection) {
+                room.hostDeviceId = participant.deviceId;
+            } else if (!room.hostDeviceId || !room.participants[room.hostDeviceId]) {
+                room.hostDeviceId = participant.deviceId;
+            }
+            participant.role = 'host';
+        });
+
+        broadcastRoomState(roomId, room);
+        sendToClient(ws, { type: 'youAreHost' });
+    }
+
+    async function promoteParticipant(ws: ElysiaWS, targetDeviceId: string): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const actorDeviceId = await resolveDeviceIdForWs(ws);
+        if (!actorDeviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+        if (targetDeviceId === actorDeviceId) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot promote yourself');
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            requireHost(room, actorDeviceId);
+            const target = room.participants[targetDeviceId];
+            if (!target) {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Participant not found');
+            }
+            if (target.role === 'host') {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Participant is already a host');
+            }
+            // Co-host: promote without stealing the primary hostDeviceId slot.
+            target.role = 'host';
+            target.lastSeen = Date.now();
+        });
+
+        // Pub/sub may not echo to the acting socket — send roomUpdate directly so the
+        // host UI updates immediately (badge/menu) without waiting on a round-trip race.
+        const roomPayload = cleanUpRoomField(room);
+        broadcastRoomState(roomId, room);
+        sendToClient(ws, { type: 'roomUpdate', room: roomPayload });
+        const promoted = room.participants[targetDeviceId];
+        if (promoted) {
+            for (const connectionId of promoted.connectionIds) {
+                const targetWs = wsConnections.get(connectionId);
+                if (targetWs) {
+                    sendToClient(targetWs, { type: 'youAreHost' });
+                    sendToClient(targetWs, { type: 'roomUpdate', room: roomPayload });
+                }
+            }
+        }
+        roomLogger.info('Participant promoted', {
+            roomId,
+            actorDeviceId,
+            targetDeviceId,
+        });
+    }
+
+    async function demoteParticipant(ws: ElysiaWS, targetDeviceId: string): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const actorDeviceId = await resolveDeviceIdForWs(ws);
+        if (!actorDeviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+        if (targetDeviceId === actorDeviceId) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot demote yourself');
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            requireHost(room, actorDeviceId);
+            const target = room.participants[targetDeviceId];
+            if (!target) {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Participant not found');
+            }
+            if (target.role !== 'host') {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Participant is not a host');
+            }
+            const otherHosts = Object.values(room.participants).filter(
+                (p) => p.deviceId !== targetDeviceId && p.role === 'host',
+            );
+            if (otherHosts.length === 0) {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot demote the last host');
+            }
+            target.role = 'member';
+            target.lastSeen = Date.now();
+            if (room.hostDeviceId === targetDeviceId) {
+                promoteNewHost(room, targetDeviceId);
+            }
+        });
+
+        const roomPayload = cleanUpRoomField(room);
+        broadcastRoomState(roomId, room);
+        sendToClient(ws, { type: 'roomUpdate', room: roomPayload });
+        const demoted = room.participants[targetDeviceId];
+        if (demoted) {
+            for (const connectionId of demoted.connectionIds) {
+                const targetWs = wsConnections.get(connectionId);
+                if (targetWs) {
+                    sendToClient(targetWs, { type: 'roomUpdate', room: roomPayload });
+                }
+            }
+        }
+        roomLogger.info('Participant demoted', {
+            roomId,
+            actorDeviceId,
+            targetDeviceId,
+            newHost: room.hostDeviceId,
+        });
+    }
+
+    async function kickParticipant(ws: ElysiaWS, targetDeviceId: string): Promise<void> {
+        const roomId = await validateClientInRoom(ws);
+        const actorDeviceId = await resolveDeviceIdForWs(ws);
+        if (!actorDeviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+        if (targetDeviceId === actorDeviceId) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot kick yourself');
+        }
+
+        const snapshot = await requireRoom(roomId);
+        requireHost(snapshot, actorDeviceId);
+        const target = snapshot.participants[targetDeviceId];
+        if (!target) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Participant not found');
+        }
+        if (target.isTvConnection) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot kick the TV device');
+        }
+
+        const affectedClientIds = new Set(target.connectionIds);
+        const clientDeviceIds = await buildClientDeviceIdMap(snapshot.clients, targetDeviceId);
+        for (const clientId of snapshot.clients) {
+            if (clientDeviceIds.get(clientId) === targetDeviceId) {
+                affectedClientIds.add(clientId);
+            }
+        }
+        const reason = 'Removed by host';
+
+        // Notify target sockets before eviction so they can clear local room state.
+        for (const connectionId of affectedClientIds) {
+            const targetWs = wsConnections.get(connectionId);
+            if (targetWs) {
+                targetWs.unsubscribe(roomId);
+                sendToClient(targetWs, { type: 'kicked', reason });
+            }
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            requireHost(room, actorDeviceId);
+            const liveTarget = room.participants[targetDeviceId];
+            if (!liveTarget) {
+                return;
+            }
+            if (liveTarget.isTvConnection) {
+                throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Cannot kick the TV device');
+            }
+
+            for (const connectionId of liveTarget.connectionIds) {
+                affectedClientIds.add(connectionId);
+            }
+            for (const clientId of room.clients) {
+                if (clientDeviceIds.get(clientId) === targetDeviceId) {
+                    affectedClientIds.add(clientId);
+                }
+            }
+
+            room.clients = room.clients.filter((id) => !affectedClientIds.has(id));
+            for (const id of affectedClientIds) {
+                const sibling = wsConnections.get(id);
+                if (sibling) {
+                    sibling.unsubscribe(roomId);
+                }
+            }
+
+            if (room.hostDeviceId === targetDeviceId) {
+                promoteNewHost(room, targetDeviceId);
+            }
+            delete room.participants[targetDeviceId];
+            if (room.clients.length === 0) {
+                room.emptySince = Date.now();
+            }
+        });
+
+        await Promise.all(
+            [...affectedClientIds].map((id) => redis.hdel(`client:${id}`, 'roomId', 'deviceId')),
+        );
+
+        if (room.clients.length > 0) {
+            const roomPayload = cleanUpRoomField(room);
+            broadcastRoomState(roomId, room);
+            sendToClient(ws, { type: 'roomUpdate', room: roomPayload });
+            for (const participant of Object.values(room.participants)) {
+                if (participant.role !== 'host') continue;
+                for (const connectionId of participant.connectionIds) {
+                    const hostWs = wsConnections.get(connectionId);
+                    if (hostWs) {
+                        sendToClient(hostWs, { type: 'youAreHost' });
+                    }
+                }
+            }
+        }
+
+        roomLogger.info('Participant kicked', {
+            roomId,
+            actorDeviceId,
+            targetDeviceId,
+            remainingClients: room.clients.length,
+            newHost: room.hostDeviceId,
+        });
+    }
+
+    async function setDisplayName(ws: ElysiaWS, displayName: string): Promise<void> {
+        const trimmed = displayName.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
+        if (!trimmed) {
+            throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Display name cannot be empty');
+        }
+
+        const roomId = await validateClientInRoom(ws);
+        const deviceId = await resolveDeviceIdForWs(ws);
+        if (!deviceId) {
+            throw new RoomError(ErrorCode.NOT_IN_ROOM);
+        }
+
+        const room = await mutateRoom(roomId, (room) => {
+            const participant = room.participants[deviceId];
+            if (!participant) {
+                throw new RoomError(ErrorCode.NOT_IN_ROOM);
+            }
+            participant.displayName = trimmed;
+            participant.lastSeen = Date.now();
+        });
+
+        broadcastRoomState(roomId, room);
     }
 
     async function leaveRoom(ws: ElysiaWS) {
-        await leaveCurrentRoom(ws);
+        await leaveCurrentRoom(ws, { removeParticipant: true });
         sendToClient(ws, { type: 'leftRoom' });
     }
 
@@ -267,7 +940,12 @@ export function createRoomService({ wsConnections, sendToClient }: RoomServiceDe
         const roomId = await validateClientInRoom(ws);
         const room = await requireRoom(roomId);
 
-        if (room.creatorId !== ws.id) {
+        const deviceId = await resolveDeviceIdForWs(ws);
+        const isCreator = room.creatorId === ws.id;
+        const isHost = deviceId ? room.participants[deviceId]?.role === 'host' : false;
+        // Creator or any current host may close the room — remote co-hosts can
+        // wind down the session without walking over to the TV.
+        if (!isCreator && !isHost) {
             throw new RoomError(ErrorCode.NOT_CREATOR_OF_ROOM);
         }
 
@@ -828,24 +1506,98 @@ export function createRoomService({ wsConnections, sendToClient }: RoomServiceDe
             sendToClient(ws, { type: 'ack', messageId: message.id });
         }
 
+        // Keep deviceId on the socket for leave/lock handlers even when the message
+        // is not a join/create (e.g. after process restart the in-memory state is gone).
+        // After the first successful join, deviceId is frozen — ignore spoofed overrides.
+        if (message.deviceId) {
+            const clientInfo = await getClientInfo(ws.id);
+            const existing = getWsDeviceState(ws);
+            const boundDeviceId = clientInfo?.deviceId ?? existing?.deviceId;
+            setWsDeviceState(ws, {
+                deviceId: boundDeviceId ?? message.deviceId,
+                isTvConnection: existing?.isTvConnection ?? false,
+                displayName: existing?.displayName,
+            });
+        }
+
         switch (message.type) {
             case 'ping':
                 sendToClient(ws, { type: 'pong' });
                 break;
             case 'createRoom':
-                await createRoom(ws, message.password, message.preferredRoomId, message.restore);
+                await createRoom(ws, {
+                    password: message.password,
+                    preferredRoomId: message.preferredRoomId,
+                    restore: message.restore,
+                    deviceId: message.deviceId,
+                    isTvClient: message.isTvClient,
+                    displayName: message.displayName,
+                });
                 break;
             case 'joinRoom':
-                await joinRoom(ws, message.roomId, message.password);
+                await joinRoom(ws, message.roomId, {
+                    password: message.password,
+                    deviceId: message.deviceId,
+                    isTvClient: message.isTvClient,
+                    displayName: message.displayName,
+                });
                 break;
             case 'reJoinRoom':
-                await joinRoom(ws, message.roomId, message.password, true);
+                await joinRoom(ws, message.roomId, {
+                    password: message.password,
+                    isRejoin: true,
+                    deviceId: message.deviceId,
+                    isTvClient: message.isTvClient,
+                    displayName: message.displayName,
+                });
                 break;
             case 'leaveRoom':
                 await leaveRoom(ws);
                 break;
             case 'closeRoom':
                 await handleCloseRoom(ws);
+                break;
+            case 'lockRoom':
+                await lockRoom(ws);
+                break;
+            case 'unlockRoom':
+                await unlockRoom(ws);
+                break;
+            case 'claimHost':
+                await claimHost(ws);
+                break;
+            case 'kickParticipant':
+                if (
+                    typeof message.targetDeviceId !== 'string' ||
+                    message.targetDeviceId.length === 0
+                ) {
+                    throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Invalid device ID');
+                }
+                await kickParticipant(ws, message.targetDeviceId);
+                break;
+            case 'promoteParticipant':
+                if (
+                    typeof message.targetDeviceId !== 'string' ||
+                    message.targetDeviceId.length === 0
+                ) {
+                    throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Invalid device ID');
+                }
+                await promoteParticipant(ws, message.targetDeviceId);
+                break;
+            case 'demoteParticipant':
+                if (
+                    typeof message.targetDeviceId !== 'string' ||
+                    message.targetDeviceId.length === 0
+                ) {
+                    throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Invalid device ID');
+                }
+                await demoteParticipant(ws, message.targetDeviceId);
+                break;
+            case 'setDisplayName':
+                if (typeof message.displayName !== 'string') {
+                    throw new RoomError(ErrorCode.INVALID_MESSAGE, 'Invalid display name');
+                }
+                await setDisplayName(ws, message.displayName);
                 break;
             case 'sendMessage': {
                 const roomId = await validateClientInRoom(ws);

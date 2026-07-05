@@ -3,6 +3,9 @@ import { v4 as uuid } from 'uuid';
 import type { ConnectionStatus, MessageBase, ServerMessage } from '@vkara/room';
 import type { ClientMessage } from '@vkara/validators/ws/client-message';
 import type { WebSocketConfig, WebSocketState } from '@/types/websocket.type';
+import { getOrCreateDeviceId } from '@/lib/device-id';
+import { getDeviceLabel } from '@/lib/device-label';
+import { useRoomRejoinSecretStore } from '@/store/roomRejoinSecretStore';
 
 class WebSocketManager {
     private static instance: WebSocketManager | null = null;
@@ -273,12 +276,34 @@ class WebSocketManager {
     sendMessage = <T extends ClientMessage['type']>(
         messageData: Omit<Extract<ClientMessage, { type: T }>, keyof MessageBase>,
     ): string => {
+        const deviceId = getOrCreateDeviceId() ?? undefined;
         const message = {
             id: uuid(),
             timestamp: Date.now(),
             requiresAck: true,
+            ...(deviceId ? { deviceId } : {}),
             ...messageData,
         } as ClientMessage;
+
+        // Attach a friendly device label on session messages when the caller omitted one.
+        if (
+            (message.type === 'createRoom' ||
+                message.type === 'joinRoom' ||
+                message.type === 'reJoinRoom') &&
+            !message.displayName
+        ) {
+            message.displayName = getDeviceLabel({
+                isTvClient: message.isTvClient === true,
+            });
+        }
+
+        if (
+            message.type === 'createRoom' ||
+            message.type === 'joinRoom' ||
+            message.type === 'reJoinRoom'
+        ) {
+            useRoomRejoinSecretStore.getState().stashPendingPassword(message.password);
+        }
 
         if (message.type === 'ping') {
             this.sendMessageToServer(message);

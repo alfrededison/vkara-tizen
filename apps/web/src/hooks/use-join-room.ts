@@ -13,7 +13,7 @@ import { toast } from '@/hooks/use-toast';
 export function useJoinRoom() {
     const t = useScopedI18n('roomSettings');
     const { ensureConnectedAndSend } = useWebSocket();
-    const { joinRoomId, joinRoomPassword, setJoinRoomId, setJoinRoomPassword, resetJoinFormState } =
+    const { joinRoomId, joinRoomPassword, setJoinRoomId, setJoinRoomPassword } =
         useRoomSettingsStore();
 
     const joinRoom = useCallback(
@@ -24,8 +24,8 @@ export function useJoinRoom() {
                     type: 'joinRoom',
                     roomId: roomIdWillUse,
                     password: data?.password || joinRoomPassword || undefined,
+                    isTvClient: false,
                 });
-                resetJoinFormState();
             } else {
                 toast({
                     id: 'invalid-room-id',
@@ -35,7 +35,7 @@ export function useJoinRoom() {
                 });
             }
         },
-        [joinRoomId, joinRoomPassword, ensureConnectedAndSend, t, resetJoinFormState],
+        [joinRoomId, joinRoomPassword, ensureConnectedAndSend, t],
     );
 
     const joinFromScan = useCallback(

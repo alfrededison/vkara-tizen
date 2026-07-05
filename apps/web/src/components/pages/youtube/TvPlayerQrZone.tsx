@@ -95,6 +95,7 @@ export function TvPlayerQrZone({
             {...shellMotionProps}
             {...(staticLayout ? {} : { layoutId: 'tv-player-qr-shell' })}
             className={cn(
+                'shrink-0',
                 isIdle
                     ? staticLayout
                         ? 'rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm sm:p-4'
@@ -129,9 +130,9 @@ export function TvPlayerQrZone({
                         'flex items-center justify-center rounded-xl bg-zinc-100 font-mono font-semibold tabular-nums text-zinc-900',
                         isIdle
                             ? compact
-                                ? 'h-[152px] w-[152px] text-5xl'
-                                : 'h-[240px] w-[240px] text-6xl sm:text-7xl'
-                            : 'h-[80px] w-[80px] text-2xl',
+                                ? 'h-[var(--tv-qr-idle-box-size-compact)] w-[var(--tv-qr-idle-box-size-compact)] text-5xl'
+                                : 'h-[var(--tv-qr-idle-box-size-lg)] w-[var(--tv-qr-idle-box-size-lg)] text-6xl sm:text-7xl'
+                            : 'h-[var(--tv-qr-corner-size)] w-[var(--tv-qr-corner-size)] text-2xl',
                     )}
                 >
                     {roomId}
@@ -194,6 +195,56 @@ export function TvPlayerQrZone({
     );
 
     if (isIdle) {
+        const qrBlock = spatialFocusKey ? (
+            <TvFocusable
+                focusKey={spatialFocusKey}
+                focusOnMount={spatialFocusOnMount}
+                accessibilityLabel={t('tvEmptyQrAria')}
+                onEnterPress={onOpenSettings}
+                className={({ focused }) =>
+                    tvDefaultFocusLeaf(focused, 'mt-0 rounded-2xl p-2')
+                }
+            >
+                {idleQrAnchor}
+            </TvFocusable>
+        ) : (
+            idleQrAnchor
+        );
+
+        const textBlock = compact ? (
+            <p
+                className={cn(
+                    'mt-5 max-w-xs text-center text-xs leading-relaxed',
+                    staticLayout ? 'text-zinc-300' : 'text-zinc-500',
+                )}
+            >
+                {t('tvIdleBothInvite')}
+            </p>
+        ) : (
+            <ShellList className="mt-5 w-full max-w-md space-y-3 text-left tv-wide-short:mt-2 tv-wide-short:space-y-3 sm:mt-10 sm:space-y-5">
+                {steps.map((step, index) => (
+                    <li key={step} className="flex items-start gap-3 sm:gap-4">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-700/90 text-sm font-medium text-zinc-300">
+                            {index + 1}
+                        </span>
+                        <span
+                            className={cn(
+                                'pt-1 text-sm leading-relaxed sm:text-base',
+                                staticLayout ? 'text-zinc-300' : 'text-zinc-400',
+                            )}
+                        >
+                            {step}
+                        </span>
+                    </li>
+                ))}
+            </ShellList>
+        );
+
+        // The 2-column layout only makes sense for the non-compact idle mode,
+        // where there are steps to display alongside the QR. Compact/both mode
+        // keeps a single-column stacked layout.
+        const twoColEnabled = !compact;
+
         return (
             <div
                 className={cn(
@@ -208,16 +259,26 @@ export function TvPlayerQrZone({
                     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgb(39_39_42_/_0.55),transparent_65%)]" />
                 ) : null}
 
+                {/*
+                   1-column (default): stacked vertically — title, subtitle, QR, instructions.
+                   2-column (tv-wide-short, non-compact only): QR on the left,
+                       right column stacks title + instructions on top of each other.
+                       The title/subtitle are rendered once to avoid duplicate <h1>.
+                */}
                 <Shell
                     {...shellMotionProps}
                     className={cn(
                         'relative z-[1] flex w-full flex-col items-center text-center',
-                        compact ? 'max-w-sm py-2 lg:py-0' : 'max-w-xl py-2 sm:py-0',
+                        twoColEnabled &&
+                            'tv-wide-short:flex-row tv-wide-short:items-center tv-wide-short:justify-center tv-wide-short:text-left',
+                        compact ? 'max-w-sm py-2 sm:max-w-none lg:py-0' : 'max-w-xl py-2 sm:max-w-4xl sm:py-0',
                     )}
                 >
+                    {/* ── 1-col only: title + subtitle above QR ── */}
                     <div
                         className={cn(
                             'flex flex-col items-center gap-2 sm:gap-3',
+                            twoColEnabled && 'tv-wide-short:hidden',
                             compact ? 'mb-4 sm:mb-5' : 'mb-5 sm:mb-8',
                         )}
                     >
@@ -244,50 +305,39 @@ export function TvPlayerQrZone({
                         </p>
                     </div>
 
-                    {spatialFocusKey ? (
-                        <TvFocusable
-                            focusKey={spatialFocusKey}
-                            focusOnMount={spatialFocusOnMount}
-                            accessibilityLabel={t('tvEmptyQrAria')}
-                            onEnterPress={onOpenSettings}
-                            className={({ focused }) =>
-                                tvDefaultFocusLeaf(focused, 'mt-0 rounded-2xl p-2')
-                            }
-                        >
-                            {idleQrAnchor}
-                        </TvFocusable>
-                    ) : (
-                        idleQrAnchor
-                    )}
+                    {/* ── QR block (left in 2-col, center in 1-col) ── */}
+                    <div className="flex shrink-0 flex-col items-center justify-center">
+                        {qrBlock}
+                    </div>
 
-                    {compact ? (
-                        <p
-                            className={cn(
-                                'mt-5 max-w-xs text-center text-xs leading-relaxed',
-                                staticLayout ? 'text-zinc-300' : 'text-zinc-500',
-                            )}
-                        >
-                            {t('tvIdleBothInvite')}
-                        </p>
-                    ) : (
-                        <ShellList className="mt-5 w-full max-w-md space-y-3 text-left sm:mt-10 sm:space-y-5">
-                            {steps.map((step, index) => (
-                                <li key={step} className="flex items-start gap-3 sm:gap-4">
-                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-700/90 text-sm font-medium text-zinc-300">
-                                        {index + 1}
-                                    </span>
-                                    <span
-                                        className={cn(
-                                            'pt-1 text-sm leading-relaxed sm:text-base',
-                                            staticLayout ? 'text-zinc-300' : 'text-zinc-400',
-                                        )}
-                                    >
-                                        {step}
-                                    </span>
-                                </li>
-                            ))}
-                        </ShellList>
-                    )}
+                    {/* ── Right column (2-col only): title + instructions stacked ── */}
+                    {twoColEnabled ? (
+                        <div className="hidden flex-col items-start justify-center border-l border-white/10 pl-8 tv-wide-short:flex">
+                            <h1
+                                className={cn(
+                                    'text-balance font-semibold leading-tight tracking-tight text-zinc-50',
+                                    'mb-5 max-w-md text-2xl sm:text-3xl lg:text-4xl',
+                                )}
+                            >
+                                {idleTitle}
+                            </h1>
+                            <p
+                                className={cn(
+                                    'mb-5 max-w-md text-pretty leading-relaxed',
+                                    staticLayout ? 'text-base text-zinc-300' : 'text-zinc-400',
+                                    'text-sm sm:text-base lg:text-lg',
+                                )}
+                            >
+                                {idleSubtitle}
+                            </p>
+                            {textBlock}
+                        </div>
+                    ) : null}
+
+                    {/* ── Instructions block (1-col only) ── */}
+                    {!twoColEnabled ? (
+                        <div className="flex flex-col items-center">{textBlock}</div>
+                    ) : null}
                 </Shell>
             </div>
         );

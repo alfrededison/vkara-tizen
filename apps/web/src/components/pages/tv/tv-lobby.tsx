@@ -9,6 +9,7 @@ import { useJoinRoom } from '@/hooks/use-join-room';
 import { useWebSocket } from '@/providers/websocket-provider';
 import { useScopedI18n } from '@/locales/client';
 import { useRoomSettingsStore } from '@/store/roomSettingsStore';
+import { useYouTubeStore } from '@/store/youtubeStore';
 import { roomSecretFieldProps } from '@/lib/room-field-autofill';
 import { TV_FOCUS_KEYS } from '@/lib/tv-spatial-nav';
 import { tvSettingsIconPlate, tvSettingsLabel, tvSettingsRow } from '@/lib/tv-focus-styles';
@@ -58,7 +59,8 @@ function LobbyActionRow({
 export function TvLobby() {
     const t = useScopedI18n('tvLobby');
     const { connectionStatus, ensureConnectedAndSend } = useWebSocket();
-    const { roomPassword, resetJoinFormState } = useRoomSettingsStore();
+    const { roomPassword } = useRoomSettingsStore();
+    const tvLobbyBanner = useYouTubeStore((s) => s.tvLobbyBanner);
     const { joinRoom, joinRoomId, joinRoomPassword, setJoinRoomId, setJoinRoomPassword } =
         useJoinRoom();
 
@@ -66,14 +68,24 @@ export function TvLobby() {
     const isConnected = connectionStatus === 'OPEN';
     const canJoin = isConnected && isValidRoomId(joinRoomId);
 
+    const clearLobbyBanner = useCallback(() => {
+        useYouTubeStore.setState({ tvLobbyBanner: null });
+    }, []);
+
     const createRoom = useCallback(() => {
+        clearLobbyBanner();
         const password = roomPassword.trim();
         ensureConnectedAndSend({
             type: 'createRoom',
             password: password || undefined,
+            isTvClient: true,
         });
-        resetJoinFormState();
-    }, [roomPassword, ensureConnectedAndSend, resetJoinFormState]);
+    }, [roomPassword, ensureConnectedAndSend, clearLobbyBanner]);
+
+    const handleJoinRoom = useCallback(() => {
+        clearLobbyBanner();
+        joinRoom();
+    }, [clearLobbyBanner, joinRoom]);
 
     const focusJoinSection = useCallback((direction: string) => {
         if (direction === 'down' || direction === 'right') {
@@ -94,6 +106,18 @@ export function TvLobby() {
                 <div className="tv-lobby-grid">
                     <header className="tv-lobby-grid__header">
                         <h1 className="tv-lobby-title">{t('title')}</h1>
+                        {tvLobbyBanner ? (
+                            <div
+                                className="mx-auto mt-4 max-w-xl rounded-xl border border-red-400/40 bg-red-950/80 px-4 py-3 text-left text-red-50"
+                                role="alert"
+                                aria-live="assertive"
+                            >
+                                <p className="text-base font-semibold">{tvLobbyBanner.title}</p>
+                                <p className="mt-1 text-sm text-red-100/90">
+                                    {tvLobbyBanner.description}
+                                </p>
+                            </div>
+                        ) : null}
                     </header>
 
                     <TvFocusable
@@ -169,7 +193,7 @@ export function TvLobby() {
                             label={t('joinButton')}
                             icon={<LogIn className="h-6 w-6" strokeWidth={2.5} aria-hidden />}
                             disabled={!canJoin}
-                            onEnterPress={joinRoom}
+                            onEnterPress={handleJoinRoom}
                             onArrowPress={(direction) => {
                                 if (direction === 'left') {
                                     setFocus(TV_FOCUS_KEYS.lobbyPassword);

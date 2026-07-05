@@ -78,10 +78,12 @@ export function sanitizeVideoForClient(video: VideoWithLegacyChannel): YouTubeVi
 }
 
 export function cleanUpRoomField(room: Room): Omit<Room, 'clients'> {
-    const { clients: roomClients, ...cleanedRoom } = room;
+    const { clients: roomClients, password: _password, ...cleanedRoom } = room;
     void roomClients;
+    void _password;
     return {
         ...cleanedRoom,
+        hasPassword: Boolean(room.password),
         playingNow: cleanedRoom.playingNow
             ? sanitizeVideoForClient(cleanedRoom.playingNow as VideoWithLegacyChannel)
             : null,

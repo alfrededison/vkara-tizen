@@ -38,7 +38,10 @@ import {
     roomCodeOtpSlotClassName,
     roomSecretFieldProps,
 } from '@/lib/room-field-autofill';
-import { resolveRoomPasswordForShare, ROOM_ID_LENGTH } from '@vkara/room';
+import { resolveRoomPasswordForShare, ROOM_ID_LENGTH, isValidRoomId } from '@vkara/room';
+import { selectRejoinPassword, useRoomRejoinSecretStore } from '@/store/roomRejoinSecretStore';
+import { RoomLockControls } from '@/components/room/room-lock-controls';
+import { RoomParticipantsRow } from '@/components/room/room-participants-row';
 
 type RoomSettingsSectionProps = {
     isRemoteLayout: boolean;
@@ -47,8 +50,7 @@ type RoomSettingsSectionProps = {
 export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps) {
     const { wsId, room, setRoom, enterTvLobby } = useYouTubeStore();
     const { ensureConnectedAndSend, connectionStatus } = useWebSocket();
-    const { roomPassword, showPassword, setRoomPassword, setShowPassword, resetJoinFormState } =
-        useRoomSettingsStore();
+    const { roomPassword, showPassword, setRoomPassword, setShowPassword } = useRoomSettingsStore();
     const {
         joinRoom,
         joinFromScan,
@@ -63,10 +65,15 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
     const tSections = useScopedI18n('settingsSections');
     const locale = useCurrentLocale();
     const isConnected = connectionStatus === 'OPEN';
+    const canJoin = isConnected && isValidRoomId(joinRoomId);
 
+    const storedRejoinPassword = useRoomRejoinSecretStore(
+        selectRejoinPassword(room?.id),
+    );
     const sharePassword = room
-        ? resolveRoomPasswordForShare(room.password, roomPassword)
+        ? resolveRoomPasswordForShare(room.password, storedRejoinPassword ?? roomPassword)
         : roomPassword;
+    const roomHasPassword = Boolean(room?.hasPassword || room?.password || storedRejoinPassword);
     const showQRInPlayer = room?.showQRInPlayer ?? true;
 
     const shareableUrl = useMemo(
@@ -104,15 +111,16 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
         ensureConnectedAndSend({
             type: 'createRoom',
             password: password || undefined,
+            isTvClient: !isRemoteLayout,
         });
-        resetJoinFormState();
-    }, [roomPassword, ensureConnectedAndSend, resetJoinFormState]);
+    }, [roomPassword, ensureConnectedAndSend, isRemoteLayout]);
 
     useEffect(() => {
-        if (room?.password) {
-            setRoomPassword(room.password);
+        const password = room?.password ?? useRoomRejoinSecretStore.getState().resolvePassword(room?.id);
+        if (password) {
+            setRoomPassword(password);
         }
-    }, [room?.id, room?.password, setRoomPassword]);
+    }, [room?.id, room?.password, room?.hasPassword, setRoomPassword]);
 
     const leaveRoom = useCallback(() => {
         if (room?.id) {
@@ -156,7 +164,7 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
                                 </p>
                             </div>
 
-                            {room.password ? (
+                            {roomHasPassword ? (
                                 <div className="space-y-2">
                                     <Label htmlFor="room-password">
                                         {tRoom('roomPassword.label')}
@@ -165,7 +173,7 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
                                         <Input
                                             id="room-password"
                                             type={showPassword ? 'text' : 'password'}
-                                            value={room.password}
+                                            value={showPassword ? (storedRejoinPassword ?? '••••••') : '••••••'}
                                             className="pr-20"
                                             disabled
                                             readOnly
@@ -192,7 +200,9 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
                                             variant="outline"
                                             size="icon"
                                             onClick={() => {
-                                                navigator.clipboard.writeText(room.password || '');
+                                                const passwordToCopy = storedRejoinPassword ?? '';
+                                                if (!passwordToCopy) return;
+                                                navigator.clipboard.writeText(passwordToCopy);
                                                 toast({
                                                     title: tRoom('copyPasswordSuccess'),
                                                     variant: 'success',
@@ -208,6 +218,9 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
                                 </div>
                             ) : null}
                         </SettingsBlock>
+
+                        <RoomLockControls />
+                        <RoomParticipantsRow />
 
                         <SettingsSubheader>{tSections('invite')}</SettingsSubheader>
                         <SettingsBlock>
@@ -362,7 +375,7 @@ export function RoomSettingsSection({ isRemoteLayout }: RoomSettingsSectionProps
                         </div>
                         <Button
                             onClick={() => joinRoom()}
-                            disabled={!isConnected}
+                            disabled={!canJoin}
                             className="w-full"
                         >
                             {tRoom('joinRoom')}

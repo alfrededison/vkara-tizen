@@ -10,6 +10,8 @@ export enum ErrorCode {
     VIDEO_NOT_FOUND = 'videoNotFound',
     VIDEO_NOT_EMBEDDABLE = 'videoNotEmbeddable',
     REJOIN_ROOM_NOT_FOUND = 'rejoinRoomNotFound',
+    ROOM_LOCKED = 'roomLocked',
+    NOT_HOST = 'notHost',
 }
 
 export interface ErrorResponse {
@@ -41,6 +43,8 @@ function getDefaultErrorMessage(code: ErrorCode): string {
         [ErrorCode.VIDEO_NOT_FOUND]: 'Video not found',
         [ErrorCode.VIDEO_NOT_EMBEDDABLE]: 'Video cannot be embedded',
         [ErrorCode.REJOIN_ROOM_NOT_FOUND]: 'Rejoin room not found',
+        [ErrorCode.ROOM_LOCKED]: 'Room is locked — ask the host to unlock it',
+        [ErrorCode.NOT_HOST]: 'Only the room host can perform this action',
     };
 
     return messages[code];

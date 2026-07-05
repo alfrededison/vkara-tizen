@@ -1,6 +1,7 @@
 import { ErrorCode, normalizePersistedRoom, type Room } from '@vkara/room';
 import type { ClientMessage, TvRoomRestoreState } from '@vkara/validators/ws/client-message';
 import type { WebSocketState } from '@/types/websocket.type';
+import { useRoomRejoinSecretStore } from '@/store/roomRejoinSecretStore';
 
 export type TvRoomSnapshot = {
     previousRoomId: string;
@@ -27,7 +28,9 @@ export function captureTvRoomSnapshot(room: Omit<Room, 'clients'> | null): TvRoo
 
     return {
         previousRoomId: normalized.id,
-        password: normalized.password,
+        password:
+            useRoomRejoinSecretStore.getState().resolvePassword(normalized.id) ??
+            normalized.password,
         restore: {
             videoQueue: [...normalized.videoQueue],
             playingNow: normalized.playingNow,
@@ -53,6 +56,7 @@ export function buildTvRecoveryCreateRoomMessage(
         password: snapshot.password,
         preferredRoomId: snapshot.previousRoomId,
         restore: snapshot.restore,
+        isTvClient: true,
     };
 }
 

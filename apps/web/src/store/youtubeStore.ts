@@ -30,6 +30,35 @@ import {
 } from '@/lib/youtube-playback-sync';
 import { getTikTokSeekBaseSeconds } from '@/lib/tiktok-playback-sync';
 import { shouldApplyRemoteVolumeChange } from '@/lib/remote-gesture-sync';
+import { useRoomSettingsStore } from '@/store/roomSettingsStore';
+import { useRoomRejoinSecretStore } from '@/store/roomRejoinSecretStore';
+import { clearStaleRoomSession } from '@/lib/room-session-lifecycle';
+
+export type TvLobbyBanner = {
+    title: string;
+    description: string;
+};
+
+const setTvLobbyBanner = (banner: TvLobbyBanner | null) =>
+    useYouTubeStore.setState({ tvLobbyBanner: banner });
+
+function showJoinFailure(
+    isTvLayout: boolean,
+    toastId: string,
+    title: string,
+    description: string,
+): void {
+    if (isTvLayout) {
+        setTvLobbyBanner({ title, description });
+        return;
+    }
+    toast({
+        id: toastId,
+        title,
+        description,
+        variant: 'error',
+    });
+}
 
 export type YouTubeStoreLayoutMode = 'both' | 'remote' | 'player';
 export type LayoutModeSource = 'auto' | 'url' | 'user';
@@ -46,6 +75,8 @@ interface YouTubeState {
     layoutModeSource: LayoutModeSource;
     /** When true, TV mode skips auto createRoom and shows the lobby instead. */
     tvSuppressAutoCreate: boolean;
+    /** Non-toast join error banner shown on the TV lobby. */
+    tvLobbyBanner: TvLobbyBanner | null;
 
     setWsId: (wsId: string | null) => void;
     setPlayer: (player: YT.Player | null) => void;
@@ -84,6 +115,7 @@ export const useYouTubeStore = create(
             layoutMode: 'remote',
             layoutModeSource: 'auto',
             tvSuppressAutoCreate: false,
+            tvLobbyBanner: null,
 
             setWsId: (wsId) => set({ wsId }),
             setPlayer: (player) => set({ player }),
@@ -186,6 +218,11 @@ export const useYouTubeStore = create(
                     case 'roomJoined': {
                         const joinedRoom = normalizePersistedRoom(message.room);
                         const roomVolume = Math.min(100, Math.max(0, joinedRoom?.volume ?? 100));
+                        if (joinedRoom?.id) {
+                            useRoomRejoinSecretStore.getState().commitPassword(joinedRoom.id);
+                        }
+                        useRoomSettingsStore.getState().resetJoinFormState();
+                        setTvLobbyBanner(null);
                         set((state) => {
                             bootstrapActivePlayback({
                                 video: joinedRoom?.playingNow,
@@ -204,6 +241,9 @@ export const useYouTubeStore = create(
                     case 'roomUpdate':
                         set((state) => {
                             const updatedRoom = normalizePersistedRoom(message.room);
+                            if (!state.room || !updatedRoom || state.room.id !== updatedRoom.id) {
+                                return state;
+                            }
                             const prevPlayingId = state.room?.playingNow?.id ?? null;
                             const nextPlayingId = updatedRoom?.playingNow?.id ?? null;
                             const prevPlaying = state.room?.isPlaying;
@@ -228,20 +268,30 @@ export const useYouTubeStore = create(
                         });
                         break;
                     case 'leftRoom':
-                        set((state) => ({
-                            room: null,
-                            player: null,
-                            tvSuppressAutoCreate:
-                                state.tvSuppressAutoCreate || Boolean(options?.isTvLayout),
-                        }));
+                        set((state) => {
+                            if (state.room?.id) {
+                                useRoomRejoinSecretStore.getState().forgetPassword(state.room.id);
+                            }
+                            return {
+                                room: null,
+                                player: null,
+                                tvSuppressAutoCreate:
+                                    state.tvSuppressAutoCreate || Boolean(options?.isTvLayout),
+                            };
+                        });
                         break;
                     case 'roomClosed':
-                        set((state) => ({
-                            room: null,
-                            player: null,
-                            tvSuppressAutoCreate:
-                                state.tvSuppressAutoCreate || Boolean(options?.isTvLayout),
-                        }));
+                        set((state) => {
+                            if (state.room?.id) {
+                                useRoomRejoinSecretStore.getState().forgetPassword(state.room.id);
+                            }
+                            return {
+                                room: null,
+                                player: null,
+                                tvSuppressAutoCreate:
+                                    state.tvSuppressAutoCreate || Boolean(options?.isTvLayout),
+                            };
+                        });
                         if (!isTvLayout) {
                             toast({
                                 id: 'room-closed',
@@ -251,16 +301,36 @@ export const useYouTubeStore = create(
                             });
                         }
                         break;
+                    case 'kicked':
+                        set((state) => {
+                            if (state.room?.id) {
+                                useRoomRejoinSecretStore.getState().forgetPassword(state.room.id);
+                            }
+                            return {
+                                room: null,
+                                player: null,
+                                tvSuppressAutoCreate:
+                                    state.tvSuppressAutoCreate || Boolean(options?.isTvLayout),
+                            };
+                        });
+                        showJoinFailure(
+                            isTvLayout,
+                            'room-kicked',
+                            t('kicked'),
+                            t('kickedDescription'),
+                        );
+                        break;
                     case 'roomNotFound':
-                        set({ room: null });
-                        if (!isTvLayout) {
-                            toast({
-                                id: 'room-not-found',
-                                title: t('roomNotFound'),
-                                description: t('roomNotFoundDescription'),
-                                variant: 'error',
-                            });
-                        }
+                        clearStaleRoomSession({
+                            isTvLayout,
+                            roomId: useYouTubeStore.getState().room?.id,
+                        });
+                        showJoinFailure(
+                            isTvLayout,
+                            'room-not-found',
+                            t('roomNotFound'),
+                            t('roomNotFoundDescription'),
+                        );
                         break;
                     case 'currentTimeChanged':
                         {
@@ -435,24 +505,49 @@ export const useYouTubeStore = create(
                         {
                             switch (message.code) {
                                 case ErrorCode.ROOM_NOT_FOUND:
-                                    set({ room: null });
-                                    if (!isTvLayout) {
-                                        toast({
-                                            id: 'room-not-found',
-                                            title: t('roomNotFound'),
-                                            description: t('roomNotFoundDescription'),
-                                            variant: 'error',
-                                        });
-                                    }
+                                    clearStaleRoomSession({
+                                        isTvLayout,
+                                        roomId: useYouTubeStore.getState().room?.id,
+                                    });
+                                    showJoinFailure(
+                                        isTvLayout,
+                                        'room-not-found',
+                                        t('roomNotFound'),
+                                        t('roomNotFoundDescription'),
+                                    );
                                     break;
                                 case ErrorCode.NOT_IN_ROOM:
                                     // Auto rejoin in WebSocketProvider — no toast (ConnectionStatusToast when WS is down).
                                     break;
                                 case ErrorCode.INCORRECT_PASSWORD:
+                                    clearStaleRoomSession({
+                                        isTvLayout,
+                                        roomId: useYouTubeStore.getState().room?.id,
+                                    });
+                                    showJoinFailure(
+                                        isTvLayout,
+                                        'incorrect-password',
+                                        t('incorrectPassword'),
+                                        t('incorrectPasswordDescription'),
+                                    );
+                                    break;
+                                case ErrorCode.ROOM_LOCKED:
+                                    clearStaleRoomSession({
+                                        isTvLayout,
+                                        roomId: useYouTubeStore.getState().room?.id,
+                                    });
+                                    showJoinFailure(
+                                        isTvLayout,
+                                        'room-locked',
+                                        t('roomLocked'),
+                                        t('roomLockedJoinDescription'),
+                                    );
+                                    break;
+                                case ErrorCode.NOT_HOST:
                                     toast({
-                                        id: 'incorrect-password',
-                                        title: t('incorrectPassword'),
-                                        description: t('incorrectPasswordDescription'),
+                                        id: 'not-host',
+                                        title: t('notHost'),
+                                        description: t('notHostDescription'),
                                         variant: 'error',
                                     });
                                     break;
@@ -475,14 +570,16 @@ export const useYouTubeStore = create(
                                     });
                                     break;
                                 case ErrorCode.REJOIN_ROOM_NOT_FOUND:
-                                    if (!isTvLayout) {
-                                        toast({
-                                            id: 'room-not-found',
-                                            title: t('roomNotFound'),
-                                            description: t('roomNotFoundDescription'),
-                                            variant: 'error',
-                                        });
-                                    }
+                                    clearStaleRoomSession({
+                                        isTvLayout,
+                                        roomId: useYouTubeStore.getState().room?.id,
+                                    });
+                                    showJoinFailure(
+                                        isTvLayout,
+                                        'room-not-found',
+                                        t('roomNotFound'),
+                                        t('roomNotFoundDescription'),
+                                    );
                                     break;
                                 default:
                                     break;
@@ -500,7 +597,7 @@ export const useYouTubeStore = create(
             storage: createJSONStorage(() => createMigratingPersistStorage()),
             partialize: (state) => {
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const { player, layoutMode, tvSuppressAutoCreate, ...rest } = state;
+                const { player, layoutMode, tvSuppressAutoCreate, tvLobbyBanner, ...rest } = state;
                 // Auto mode is re-derived from viewport on load; persisting layoutMode causes remote→TV flicker.
                 if (state.layoutModeSource === 'auto') {
                     return {
@@ -508,9 +605,16 @@ export const useYouTubeStore = create(
                         player: null,
                         layoutMode: state.layoutMode,
                         tvSuppressAutoCreate: false,
+                        tvLobbyBanner: null,
                     };
                 }
-                return { ...rest, player: null, layoutMode, tvSuppressAutoCreate: false };
+                return {
+                    ...rest,
+                    player: null,
+                    layoutMode,
+                    tvSuppressAutoCreate: false,
+                    tvLobbyBanner: null,
+                };
             },
             merge: (persistedState, currentState) => {
                 const persisted = persistedState as Partial<YouTubeState>;

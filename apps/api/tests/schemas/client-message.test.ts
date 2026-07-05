@@ -159,4 +159,79 @@ describe('wsClientMessageSchema', () => {
             }),
         ).toBe(true);
     });
+
+    it('accepts room protection messages and optional device identity fields', () => {
+        expect(check({ ...base, type: 'lockRoom' })).toBe(true);
+        expect(check({ ...base, type: 'unlockRoom' })).toBe(true);
+        expect(check({ ...base, type: 'claimHost' })).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'kickParticipant',
+                targetDeviceId: 'device-uuid',
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'promoteParticipant',
+                targetDeviceId: 'device-uuid',
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'demoteParticipant',
+                targetDeviceId: 'device-uuid',
+            }),
+        ).toBe(true);
+        expect(check({ ...base, type: 'kickParticipant' })).toBe(false);
+        expect(
+            check({
+                ...base,
+                type: 'promoteParticipant',
+                targetDeviceId: '',
+            }),
+        ).toBe(false);
+        expect(
+            check({
+                ...base,
+                type: 'setDisplayName',
+                displayName: 'Remote #1',
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'joinRoom',
+                roomId: '1234',
+                deviceId: 'device-uuid',
+                isTvClient: false,
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'createRoom',
+                deviceId: 'device-uuid',
+                isTvClient: true,
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'reJoinRoom',
+                roomId: '1234',
+                deviceId: 'device-uuid',
+                isTvClient: true,
+            }),
+        ).toBe(true);
+        expect(
+            check({
+                ...base,
+                type: 'setDisplayName',
+                displayName: 'x'.repeat(41),
+            }),
+        ).toBe(false);
+    });
 });

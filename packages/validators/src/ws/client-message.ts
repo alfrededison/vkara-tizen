@@ -6,6 +6,8 @@ const messageBaseSchema = z.object({
     id: z.string(),
     timestamp: z.number(),
     requiresAck: z.boolean().optional(),
+    /** Client-generated anonymous device id (see apps/web/src/lib/device-id). Optional for backward compat. */
+    deviceId: z.string().optional(),
 });
 
 const captionTrackSchema = z.object({
@@ -29,6 +31,14 @@ export const tvRoomRestoreSchema = z.object({
     tiktokPhotoMaxIndex: z.number(),
 });
 
+/**
+ * Display-name schema shared between create/join/rejoin/setDisplayName.
+ * Trim whitespace then cap length; `optional()` only for join/create messages.
+ * The runtime guard in apps/api/src/modules/room/room-service.ts drops empty results
+ * (so a whitespace-only `displayName` is treated as "use the auto-generated fallback").
+ */
+const displayNameSchema = z.string().trim().max(40);
+
 const withBase = <T extends z.ZodRawShape>(shape: T) => messageBaseSchema.extend(shape);
 
 export const wsClientMessageSchema = z.discriminatedUnion('type', [
@@ -38,19 +48,43 @@ export const wsClientMessageSchema = z.discriminatedUnion('type', [
         password: z.string().optional(),
         preferredRoomId: z.string().optional(),
         restore: tvRoomRestoreSchema.optional(),
+        isTvClient: z.boolean().optional(),
+        displayName: displayNameSchema.optional(),
     }),
     withBase({
         type: z.literal('joinRoom'),
         roomId: z.string(),
         password: z.string().optional(),
+        isTvClient: z.boolean().optional(),
+        displayName: displayNameSchema.optional(),
     }),
     withBase({
         type: z.literal('reJoinRoom'),
         roomId: z.string(),
         password: z.string().optional(),
+        isTvClient: z.boolean().optional(),
+        displayName: displayNameSchema.optional(),
     }),
     withBase({ type: z.literal('leaveRoom') }),
     withBase({ type: z.literal('closeRoom') }),
+    withBase({ type: z.literal('lockRoom') }),
+    withBase({ type: z.literal('unlockRoom') }),
+    withBase({ type: z.literal('claimHost') }),
+    // `targetDeviceId` must not be named `deviceId` — base messages already use
+    // `deviceId` for the acting client identity (see room-service handleMessage).
+    withBase({
+        type: z.literal('kickParticipant'),
+        targetDeviceId: z.string().min(1).max(128),
+    }),
+    withBase({
+        type: z.literal('promoteParticipant'),
+        targetDeviceId: z.string().min(1).max(128),
+    }),
+    withBase({
+        type: z.literal('demoteParticipant'),
+        targetDeviceId: z.string().min(1).max(128),
+    }),
+    withBase({ type: z.literal('setDisplayName'), displayName: displayNameSchema }),
     withBase({ type: z.literal('sendMessage'), message: z.string() }),
     withBase({ type: z.literal('addVideo'), video: youtubeVideoSchema }),
     withBase({ type: z.literal('removeVideoFromQueue'), videoId: z.string() }),

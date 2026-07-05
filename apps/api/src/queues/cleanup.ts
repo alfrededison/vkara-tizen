@@ -5,10 +5,11 @@ import type { Room } from '@vkara/room';
 import { createRedisOptions } from '@vkara/redis';
 
 import { env } from '@/env';
+import { pruneStaleParticipants } from '@/modules/room/participant-policy';
 import { recordOrphanedClientsRemoved, recordRoomReleased } from '@/modules/stats/service-stats';
 import { closeRoom, wsConnections } from '@/server';
 import { createContextLogger } from '@/utils/logger';
-import { scanRedisKeys } from '@/utils/room-store';
+import { loadRoom, mutateRoom, scanRedisKeys } from '@/utils/room-store';
 
 const EMPTY_ROOM_TIMEOUT = env.EMPTY_ROOM_TIMEOUT * 1000;
 const ORPHANED_CLIENT_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
@@ -59,6 +60,36 @@ function getConnectedClientIds(room: Room): string[] {
     return (room.clients || []).filter((clientId) => wsConnections.has(clientId));
 }
 
+function pruneRoomClients(room: Room): boolean {
+    const connectedClientIds = getConnectedClientIds(room);
+    let changed = false;
+
+    if (connectedClientIds.length > 0) {
+        if (connectedClientIds.length !== room.clients.length) {
+            room.clients = connectedClientIds;
+            changed = true;
+        }
+        if (room.emptySince !== undefined) {
+            delete room.emptySince;
+            changed = true;
+        }
+        return changed;
+    }
+
+    if (room.clients.length > 0) {
+        room.clients = [];
+        changed = true;
+    }
+
+    if (!room.emptySince) {
+        room.emptySince =
+            room.clients.length === 0 && room.lastActivity ? room.lastActivity : Date.now();
+        changed = true;
+    }
+
+    return changed;
+}
+
 /**
  * Releases rooms that have had no connected clients for EMPTY_ROOM_TIMEOUT (default 1 hour).
  * Rooms with at least one active WebSocket connection are never released by this job.
@@ -70,55 +101,48 @@ async function cleanupInactiveRooms() {
     let cleanedRoomsCount = 0;
 
     for (const key of keys) {
-        const roomData = await connection.get(key);
-        if (!roomData) {
+        const roomId = key.slice('room:'.length);
+        const room = await loadRoom(roomId);
+        if (!room) {
             logger.warn(`Room data not found for key: ${key}`);
             continue;
         }
 
         try {
-            const room: Room = JSON.parse(roomData);
             const connectedClientIds = getConnectedClientIds(room);
-            let roomChanged = false;
 
             if (connectedClientIds.length > 0) {
-                if (connectedClientIds.length !== room.clients.length) {
-                    room.clients = connectedClientIds;
-                    roomChanged = true;
-                }
-                if (room.emptySince !== undefined) {
-                    delete room.emptySince;
-                    roomChanged = true;
-                }
-                if (roomChanged) {
-                    await connection.set(key, JSON.stringify(room));
-                }
+                await mutateRoom(
+                    roomId,
+                    (liveRoom) => {
+                        pruneStaleParticipants(liveRoom, now, (clientId) =>
+                            wsConnections.has(clientId),
+                        );
+                        pruneRoomClients(liveRoom);
+                    },
+                    { isRejoin: true },
+                );
                 continue;
             }
 
-            if (room.clients.length > 0) {
-                room.clients = [];
-                roomChanged = true;
-            }
+            const emptyRoom = await mutateRoom(
+                roomId,
+                (liveRoom) => {
+                    pruneStaleParticipants(liveRoom, now, (clientId) =>
+                        wsConnections.has(clientId),
+                    );
+                    pruneRoomClients(liveRoom);
+                },
+                { isRejoin: true },
+            );
 
-            if (!room.emptySince) {
-                // Legacy rooms with no clients: use lastActivity so we do not reset the 1h grace period.
-                room.emptySince =
-                    room.clients.length === 0 && room.lastActivity ? room.lastActivity : now;
-                roomChanged = true;
-            }
-
-            if (roomChanged) {
-                await connection.set(key, JSON.stringify(room));
-            }
-
-            const emptySince = room.emptySince ?? room.lastActivity;
+            const emptySince = emptyRoom.emptySince ?? emptyRoom.lastActivity;
             const emptyForMs = now - emptySince;
             const shouldRelease = emptyForMs > EMPTY_ROOM_TIMEOUT;
 
             if (!shouldRelease) {
-                logger.debug(`Room ${room.id} is empty but within grace period`, {
-                    roomId: room.id,
+                logger.debug(`Room ${emptyRoom.id} is empty but within grace period`, {
+                    roomId: emptyRoom.id,
                     emptyForMinutes: Math.round(emptyForMs / (60 * 1000)),
                     gracePeriodMinutes: Math.round(EMPTY_ROOM_TIMEOUT / (60 * 1000)),
                 });
@@ -126,13 +150,13 @@ async function cleanupInactiveRooms() {
             }
 
             logger.debug(`Cleaning up empty room`, {
-                roomId: room.id,
+                roomId: emptyRoom.id,
                 reason: 'no connected clients',
                 emptySince: new Date(emptySince).toISOString(),
                 emptyForMinutes: Math.round(emptyForMs / (60 * 1000)),
             });
 
-            await closeRoom(room.id, 'Room has been closed because it had no connected clients');
+            await closeRoom(emptyRoom.id, 'Room has been closed because it had no connected clients');
             cleanedRoomsCount++;
             recordRoomReleased();
         } catch (error) {

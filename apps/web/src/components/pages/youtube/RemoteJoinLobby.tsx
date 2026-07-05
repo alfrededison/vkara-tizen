@@ -44,7 +44,7 @@ export function RemoteJoinLobby({ allowCreateRoom = false }: RemoteJoinLobbyProp
     const tRoom = useScopedI18n('roomSettings');
     const searchParams = useSearchParams();
     const { connectionStatus, ensureConnectedAndSend } = useWebSocket();
-    const { roomPassword, setRoomPassword, resetJoinFormState } = useRoomSettingsStore();
+    const { roomPassword, setRoomPassword } = useRoomSettingsStore();
     const {
         joinRoom,
         joinFromScan,
@@ -55,6 +55,7 @@ export function RemoteJoinLobby({ allowCreateRoom = false }: RemoteJoinLobbyProp
     } = useJoinRoom();
 
     const isConnected = connectionStatus === 'OPEN';
+    const canJoin = isConnected && isValidRoomId(joinRoomId);
 
     const createRoom = useCallback(() => {
         const password = roomPassword.trim();
@@ -62,8 +63,7 @@ export function RemoteJoinLobby({ allowCreateRoom = false }: RemoteJoinLobbyProp
             type: 'createRoom',
             password: password || undefined,
         });
-        resetJoinFormState();
-    }, [roomPassword, ensureConnectedAndSend, resetJoinFormState]);
+    }, [roomPassword, ensureConnectedAndSend]);
 
     useEffect(() => {
         const roomIdParam = searchParams.get('roomId');
@@ -154,7 +154,7 @@ export function RemoteJoinLobby({ allowCreateRoom = false }: RemoteJoinLobbyProp
 
                             <Button
                                 type="submit"
-                                disabled={!isConnected}
+                                disabled={!canJoin}
                                 className="h-11 w-full text-base"
                                 size="lg"
                             >

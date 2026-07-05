@@ -81,11 +81,12 @@ export function TvRoomLobby({
 }: TvRoomLobbyProps) {
     const t = useScopedI18n('tvLobby');
     const { connectionStatus, ensureConnectedAndSend } = useWebSocket();
-    const { roomPassword, resetJoinFormState } = useRoomSettingsStore();
+    const { roomPassword } = useRoomSettingsStore();
     const { joinRoom, joinRoomId, joinRoomPassword, setJoinRoomId, setJoinRoomPassword } =
         useJoinRoom();
 
     const isConnected = connectionStatus === 'OPEN';
+    const canJoin = isConnected && isValidRoomId(joinRoomId);
 
     const createRoom = useCallback(() => {
         const password = roomPassword.trim();
@@ -93,8 +94,7 @@ export function TvRoomLobby({
             type: 'createRoom',
             password: password || undefined,
         });
-        resetJoinFormState();
-    }, [roomPassword, ensureConnectedAndSend, resetJoinFormState]);
+    }, [roomPassword, ensureConnectedAndSend]);
 
     const handleJoin = useCallback(
         (event: React.FormEvent) => {

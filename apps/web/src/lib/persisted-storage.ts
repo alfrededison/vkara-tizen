@@ -18,6 +18,7 @@ export const PERSIST_STORE_KEYS = {
     personalization: 'vkara-personalization',
     search: 'search-store',
     appSettings: 'vkara-app-settings',
+    rejoinSecrets: 'vkara-room-rejoin-secrets',
 } as const;
 
 function normalizePersistedYouTubeVideo(video: unknown): YouTubeVideo | null {
