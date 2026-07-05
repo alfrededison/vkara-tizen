@@ -218,7 +218,7 @@ export function TvRoomLobby({
                         label={t('joinButton')}
                         type="submit"
                         variant="secondary"
-                        disabled={!isConnected || !isValidRoomId(joinRoomId)}
+                        disabled={!canJoin}
                         onPress={joinRoom}
                     >
                         {t('joinButton')}
@@ -227,7 +227,7 @@ export function TvRoomLobby({
                     <Button
                         type="submit"
                         variant="secondary"
-                        disabled={!isConnected || !isValidRoomId(joinRoomId)}
+                        disabled={!canJoin}
                         className="h-11 w-full"
                     >
                         {t('joinButton')}
