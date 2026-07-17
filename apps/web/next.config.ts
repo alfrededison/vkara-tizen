@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import path from 'node:path';
+import { withSentryConfig } from '@sentry/nextjs';
 
 const withBundleAnalyzer = require('@next/bundle-analyzer')({
     enabled: process.env.ANALYZE === 'true',
@@ -42,4 +43,12 @@ const nextConfig: NextConfig = {
     },
 };
 
-export default withBundleAnalyzer(nextConfig);
+export default withSentryConfig(withBundleAnalyzer(nextConfig), {
+    org: process.env.SENTRY_ORG ?? 'vkara',
+    project: process.env.SENTRY_PROJECT ?? 'vkara-web',
+    authToken: process.env.SENTRY_AUTH_TOKEN,
+    widenClientFileUpload: true,
+    // Proxy browser events through Next to reduce ad-blocker drops.
+    tunnelRoute: '/monitoring',
+    silent: !process.env.CI,
+});

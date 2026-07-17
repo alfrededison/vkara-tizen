@@ -1,13 +1,16 @@
 import chalk from 'chalk';
 import winston from 'winston';
-import * as Transport from 'winston-transport';
+import Transport from 'winston-transport';
+import * as Sentry from '@sentry/elysia';
 
 import { env } from '@/env';
 import { parseEnvFlagValue } from '@vkara/env/base';
+import { isSentryEnabled, resolveSentryLogLevels } from '@vkara/env/sentry';
 
 const LOG_TO_FILES = parseEnvFlagValue(env.LOG_TO_FILES, false);
 const ERROR_LOG_PATH = env.ERROR_LOG_PATH;
 const COMBINED_LOG_PATH = env.COMBINED_LOG_PATH;
+const isProduction = env.NODE_ENV === 'production';
 
 // Custom log format
 const customFormat = winston.format.printf(({ level, message, timestamp, context }) => {
@@ -30,9 +33,55 @@ const customFormat = winston.format.printf(({ level, message, timestamp, context
     return `${chalk.gray(timestamp)} ${colorizedLevel} ${colorizedContext}: ${message}`;
 });
 
-// Create the logger
+/**
+ * Sentry Logs only accept string | number | boolean attributes.
+ * Flatten Error / nested objects so Winston meta survives the bridge.
+ */
+const sentryAttributesFormat = winston.format((info) => {
+    const { error, ...rest } = info as Record<string, unknown> & {
+        error?: unknown;
+    };
+
+    if (error instanceof Error) {
+        rest.error_name = error.name;
+        rest.error_message = error.message;
+        if (!isProduction && error.stack) {
+            rest.error_stack = error.stack;
+        }
+    } else if (error !== undefined && error !== null) {
+        rest.error =
+            typeof error === 'string' || typeof error === 'number' || typeof error === 'boolean'
+                ? error
+                : safeJson(error);
+    }
+
+    for (const [key, value] of Object.entries(rest)) {
+        if (key === 'level' || key === 'message' || key === 'timestamp') {
+            continue;
+        }
+        if (value === undefined || value === null) {
+            delete rest[key];
+            continue;
+        }
+        const valueType = typeof value;
+        if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+            continue;
+        }
+        rest[key] = safeJson(value);
+    }
+
+    return rest as winston.Logform.TransformableInfo;
+})();
+
+function safeJson(value: unknown): string {
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return '[unserializable]';
+    }
+}
+
 const transports: Transport[] = [
-    // Console transport for development
     new winston.transports.Console({
         format: winston.format.combine(winston.format.colorize(), winston.format.padLevels()),
     }),
@@ -59,6 +108,21 @@ if (LOG_TO_FILES) {
     }
 }
 
+if (isSentryEnabled(env.SENTRY_DSN, env.SENTRY_ENABLED) && Sentry.isInitialized()) {
+    const levels = resolveSentryLogLevels(env.SENTRY_LOG_LEVELS, env.NODE_ENV);
+    const SentryWinstonTransport = Sentry.createSentryWinstonTransport(Transport, {
+        levels,
+    });
+
+    transports.push(
+        new SentryWinstonTransport({
+            // Skip calling the transport for noisier levels Winston-side.
+            level: isProduction ? 'warn' : 'info',
+            format: sentryAttributesFormat,
+        }),
+    );
+}
+
 const logger = winston.createLogger({
     level: env.LOG_LEVEL,
     format: winston.format.combine(
@@ -66,9 +130,9 @@ const logger = winston.createLogger({
             format: 'YYYY-MM-DD HH:mm:ss',
         }),
         winston.format.errors({ stack: true }),
-        env.NODE_ENV === 'production' ? winston.format.json() : customFormat,
+        isProduction ? winston.format.json() : customFormat,
     ),
-    defaultMeta: { service: 'video-room' },
+    defaultMeta: { service: 'vkara-api' },
     transports,
 });
 

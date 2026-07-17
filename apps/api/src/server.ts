@@ -6,6 +6,7 @@ import type { ZodType } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import serverTiming from '@elysiajs/server-timing';
 import { rateLimit } from 'elysia-rate-limit';
+import * as Sentry from '@sentry/elysia';
 
 import { bindRoomPublisher } from '@/modules/room/room-broadcast';
 import { createRoomService } from '@/modules/room/room-service';
@@ -15,7 +16,7 @@ import { scheduleHourlyReportJob } from '@/queues/hourly-report';
 import { createContextLogger } from '@/utils/logger';
 import type { ServerMessage } from '@vkara/room';
 
-import { applyTlsInsecureRuntime, isExperimentsEnabled } from '@vkara/env';
+import { applyTlsInsecureRuntime, isExperimentsEnabled, parseEnvFlagValue } from '@vkara/env';
 import { resolveCorsConfig } from '@vkara/env/server';
 
 import { env } from './env';
@@ -45,12 +46,14 @@ const roomService = createRoomService({ wsConnections, sendToClient });
 
 export const closeRoom = roomService.closeRoom;
 
-export const wsServer = new Elysia({
-    websocket: {
-        idleTimeout: 960,
-        maxPayloadLength: 1024 * 1024,
-    },
-})
+export const wsServer = Sentry.withElysia(
+    new Elysia({
+        websocket: {
+            idleTimeout: 960,
+            maxPayloadLength: 1024 * 1024,
+        },
+    }),
+)
     .on('start', ({ server }) => {
         bindRoomPublisher((topic, payload) => {
             server?.publish(topic, payload);
@@ -68,6 +71,7 @@ export const wsServer = new Elysia({
         try {
             await shutdownTikTokPool().catch(() => {});
             await redis.quit();
+            await Sentry.close(2000);
             await wsServer.stop();
             serverLogger.info('Server stopped successfully');
         } catch (error) {
@@ -110,6 +114,12 @@ export const wsServer = new Elysia({
         memoryUsage: process.memoryUsage(),
         cpuUsage: process.cpuUsage(),
     }))
+    .get('/debug-sentry', () => {
+        if (!parseEnvFlagValue(env.SENTRY_VERIFY, false)) {
+            return new Response('Not Found', { status: 404 });
+        }
+        throw new Error('Sentry test error — vkara-api');
+    })
     .listen(env.PORT);
 
 ['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach((signal) => {
@@ -123,6 +133,7 @@ export const wsServer = new Elysia({
         try {
             await shutdownTikTokPool().catch(() => {});
             await redis.quit();
+            await Sentry.close(2000);
             await wsServer.stop();
             serverLogger.info('Clean shutdown completed');
             process.exit(0);
