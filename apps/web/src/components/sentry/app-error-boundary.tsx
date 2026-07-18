@@ -3,6 +3,13 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import * as Sentry from '@sentry/nextjs';
 
+import { RecoveryShell } from '@/components/sentry/recovery-shell';
+import {
+    AUTO_RESET_MS,
+    HARD_RECOVER_MS,
+    clearErrorRecoveryState,
+    planRecoveryAttempt,
+} from '@/hooks/use-error-boundary-recovery';
 import { useI18n } from '@/locales/client';
 
 type FallbackProps = {
@@ -15,47 +22,48 @@ function AutoRecoverFallback({ error, resetError }: FallbackProps) {
     const [phase, setPhase] = useState<'retrying' | 'redirecting'>('retrying');
 
     useEffect(() => {
+        const plan = planRecoveryAttempt(error);
         Sentry.captureException(error, {
-            tags: { error_boundary: 'react_tree' },
+            tags: {
+                error_boundary: 'react_tree',
+                recovery_attempt: String(plan.attempts),
+                recovery_mode: plan.mode,
+            },
         });
 
-        const soft = window.setTimeout(() => {
+        if (plan.mode === 'hard') {
+            setPhase('redirecting');
+            const hardTimer = window.setTimeout(() => {
+                clearErrorRecoveryState();
+                window.location.replace('/');
+            }, HARD_RECOVER_MS);
+            return () => window.clearTimeout(hardTimer);
+        }
+
+        setPhase('retrying');
+        const softTimer = window.setTimeout(() => {
             try {
                 resetError();
             } catch {
                 setPhase('redirecting');
+                clearErrorRecoveryState();
                 window.location.replace('/');
             }
-        }, 1000);
+        }, AUTO_RESET_MS);
 
-        // If soft reset somehow leaves us here, hard-navigate.
-        const hard = window.setTimeout(() => {
-            setPhase('redirecting');
-            window.location.replace('/');
-        }, 4000);
-
-        return () => {
-            window.clearTimeout(soft);
-            window.clearTimeout(hard);
-        };
+        return () => window.clearTimeout(softTimer);
     }, [error, resetError]);
 
     return (
-        <div
-            className="flex min-h-[30vh] flex-col items-center justify-center gap-3 px-6 py-10 text-center"
-            role="status"
-            aria-live="polite"
-        >
-            <div
-                className="size-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
-                aria-hidden
-            />
-            <p className="text-sm text-muted-foreground">
-                {phase === 'redirecting'
+        <RecoveryShell
+            phase={phase}
+            label={
+                phase === 'redirecting'
                     ? t('error.boundary.redirecting')
-                    : t('error.boundary.retrying')}
-            </p>
-        </div>
+                    : t('error.boundary.retrying')
+            }
+            className="flex min-h-[30vh] items-center justify-center px-6 py-10"
+        />
     );
 }
 
