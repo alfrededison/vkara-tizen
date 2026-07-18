@@ -77,6 +77,7 @@ async function createOrReplace(
 ) {
     const body = {
         title: dashboard.title,
+        description: dashboard.description,
         widgets: dashboard.widgets,
         projects: dashboard.projects ?? [-1],
         period: dashboard.period ?? '24h',

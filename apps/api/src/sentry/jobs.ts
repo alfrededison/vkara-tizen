@@ -10,10 +10,12 @@ import { captureUnexpected } from './capture';
 const redisLogger = createContextLogger('Redis');
 
 const watchedRedis = new WeakSet<object>();
+const lastRedisErrorCaptureAt = new WeakMap<object, number>();
+const REDIS_ERROR_CAPTURE_COOLDOWN_MS = 60_000;
 
 /**
  * Attach a one-shot Redis `error` listener that logs + opens a Sentry Issue.
- * Idempotent per client instance.
+ * Idempotent per client instance. Sentry capture is rate-limited (1/min) to avoid spam.
  */
 export function watchRedisClient(client: Redis, name: string): Redis {
     if (watchedRedis.has(client)) {
@@ -23,6 +25,12 @@ export function watchRedisClient(client: Redis, name: string): Redis {
 
     client.on('error', (error: Error) => {
         redisLogger.error('Redis client error', { error, redis_client: name });
+        const now = Date.now();
+        const lastAt = lastRedisErrorCaptureAt.get(client) ?? 0;
+        if (now - lastAt < REDIS_ERROR_CAPTURE_COOLDOWN_MS) {
+            return;
+        }
+        lastRedisErrorCaptureAt.set(client, now);
         captureUnexpected(error, {
             tags: { area: 'redis', redis_client: name },
         });

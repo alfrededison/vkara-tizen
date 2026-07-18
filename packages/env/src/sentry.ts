@@ -6,6 +6,13 @@ import { envSkipValidation, parseEnvFlagValue } from './base';
 /** Canonical Sentry environments for vkara (exactly two). */
 export type SentryDeployEnvironment = 'development' | 'production';
 
+/**
+ * Attribute / field keys that must never leave the process as Sentry payload values.
+ * Shared by API `beforeSendLog` and web `scrubSentryEvent`.
+ */
+export const SENTRY_REDACT_ATTR_KEY =
+    /pass(word|wd)?|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|redis_password|rejoin/i;
+
 export type ResolveSentryEnvironmentInput = {
     /** Explicit `SENTRY_ENVIRONMENT` / `NEXT_PUBLIC_SENTRY_ENVIRONMENT`. */
     explicit?: string;

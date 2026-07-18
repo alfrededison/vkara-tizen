@@ -88,7 +88,6 @@ export const wsServer = Sentry.withElysia(
             await shutdownTikTokPool().catch(() => {});
             await redis.quit();
             await Sentry.close(2000);
-            await wsServer.stop();
             serverLogger.info('Server stopped successfully');
         } catch (error) {
             serverLogger.error('Error during server shutdown', { error });
@@ -152,9 +151,7 @@ export const wsServer = Sentry.withElysia(
         }, 5000);
 
         try {
-            await shutdownTikTokPool().catch(() => {});
-            await redis.quit();
-            await Sentry.close(2000);
+            // Cleanup runs in the `stop` lifecycle; do not re-run it here.
             await wsServer.stop();
             serverLogger.info('Clean shutdown completed');
             process.exit(0);

@@ -9,16 +9,13 @@ import {
     isSentryEnabled,
     readSentryEnvironmentFromProcess,
     resolveSentryTracesSampleRate,
+    SENTRY_REDACT_ATTR_KEY,
 } from '@vkara/env/sentry';
 
 const dsn = process.env.SENTRY_DSN;
 const sentryEnvironment = readSentryEnvironmentFromProcess();
 const enabled = isSentryEnabled(dsn, process.env.SENTRY_ENABLED);
 const isProduction = sentryEnvironment === 'production';
-
-/** Keys that must never leave the process as log attributes. */
-const REDACT_ATTR_KEY =
-    /pass(word|wd)?|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|redis_password/i;
 
 Sentry.init({
     dsn,
@@ -45,7 +42,7 @@ Sentry.init({
 
         if (log.attributes) {
             for (const key of Object.keys(log.attributes)) {
-                if (REDACT_ATTR_KEY.test(key)) {
+                if (SENTRY_REDACT_ATTR_KEY.test(key)) {
                     log.attributes[key] = '[Redacted]';
                 }
             }

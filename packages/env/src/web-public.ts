@@ -28,6 +28,8 @@ export function webPublicEnv() {
             NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: z.string().optional(),
             NEXT_PUBLIC_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: z.string().optional(),
             NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: z.string().optional(),
+            /** Browser opt-out; falls back to server `SENTRY_ENABLED` when unset. */
+            NEXT_PUBLIC_SENTRY_ENABLED: z.string().optional(),
         },
         runtimeEnv: {
             NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
@@ -45,6 +47,7 @@ export function webPublicEnv() {
                 process.env.NEXT_PUBLIC_SENTRY_REPLAYS_SESSION_SAMPLE_RATE,
             NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:
                 process.env.NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE,
+            NEXT_PUBLIC_SENTRY_ENABLED: process.env.NEXT_PUBLIC_SENTRY_ENABLED,
         },
         clientPrefix: 'NEXT_PUBLIC_',
         emptyStringAsUndefined: true,

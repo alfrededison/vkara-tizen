@@ -36,41 +36,43 @@ const customFormat = winston.format.printf(({ level, message, timestamp, context
 /**
  * Sentry Logs only accept string | number | boolean attributes.
  * Flatten Error / nested objects so Winston meta survives the bridge.
+ *
+ * Mutates `info` in place so Winston Symbol keys (LEVEL, MESSAGE, SPLAT) stay intact.
  */
 const sentryAttributesFormat = winston.format((info) => {
-    const { error, ...rest } = info as Record<string, unknown> & {
-        error?: unknown;
-    };
+    const record = info as Record<string, unknown> & { error?: unknown };
+    const error = record.error;
 
     if (error instanceof Error) {
-        rest.error_name = error.name;
-        rest.error_message = error.message;
+        record.error_name = error.name;
+        record.error_message = error.message;
         if (!isProduction && error.stack) {
-            rest.error_stack = error.stack;
+            record.error_stack = error.stack;
         }
+        delete record.error;
     } else if (error !== undefined && error !== null) {
-        rest.error =
+        record.error =
             typeof error === 'string' || typeof error === 'number' || typeof error === 'boolean'
                 ? error
                 : safeJson(error);
     }
 
-    for (const [key, value] of Object.entries(rest)) {
-        if (key === 'level' || key === 'message' || key === 'timestamp') {
+    for (const [key, value] of Object.entries(record)) {
+        if (key === 'level' || key === 'message' || key === 'timestamp' || key === 'error') {
             continue;
         }
         if (value === undefined || value === null) {
-            delete rest[key];
+            delete record[key];
             continue;
         }
         const valueType = typeof value;
         if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
             continue;
         }
-        rest[key] = safeJson(value);
+        record[key] = safeJson(value);
     }
 
-    return rest as winston.Logform.TransformableInfo;
+    return info;
 })();
 
 function safeJson(value: unknown): string {

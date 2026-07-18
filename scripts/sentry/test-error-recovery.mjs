@@ -1,4 +1,8 @@
-import { chromium } from '../../node_modules/.bun/playwright@1.60.0/node_modules/playwright/index.js';
+import { createRequire } from 'node:module';
+
+// Resolve via apps/api (workspace owner of playwright) — avoid Bun store version pins.
+const require = createRequire(new URL('../../apps/api/package.json', import.meta.url));
+const { chromium } = require('playwright');
 
 const BASE = 'http://localhost:3000';
 const results = [];

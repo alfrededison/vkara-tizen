@@ -36,14 +36,24 @@ export function readRecoveryBucket(fingerprint: string): RecoveryBucket {
         if (!raw) {
             return { fingerprint, attempts: 0, lastAt: 0 };
         }
-        const parsed = JSON.parse(raw) as RecoveryBucket;
+        const parsed: unknown = JSON.parse(raw);
         if (
-            parsed.fingerprint !== fingerprint ||
-            Date.now() - parsed.lastAt > 5 * 60 * 1000
+            !parsed ||
+            typeof parsed !== 'object' ||
+            !('fingerprint' in parsed) ||
+            !('attempts' in parsed) ||
+            !('lastAt' in parsed)
         ) {
             return { fingerprint, attempts: 0, lastAt: 0 };
         }
-        return parsed;
+        const bucket = parsed as RecoveryBucket;
+        if (
+            bucket.fingerprint !== fingerprint ||
+            Date.now() - bucket.lastAt > 5 * 60 * 1000
+        ) {
+            return { fingerprint, attempts: 0, lastAt: 0 };
+        }
+        return bucket;
     } catch {
         return { fingerprint, attempts: 0, lastAt: 0 };
     }
@@ -101,9 +111,12 @@ export function useErrorBoundaryRecovery(
     options?: {
         /** Absolute path for hard recovery (default `/`). */
         homeHref?: string;
+        /** Sentry tag value for `error_boundary` (default `auto_recovery`). */
+        boundaryTag?: string;
     },
 ): ErrorRecoveryPhase {
     const homeHref = options?.homeHref ?? '/';
+    const boundaryTag = options?.boundaryTag ?? 'auto_recovery';
     const reportedRef = useRef<string | null>(null);
     const [phase, setPhase] = useState<ErrorRecoveryPhase>('reporting');
 
@@ -114,9 +127,10 @@ export function useErrorBoundaryRecovery(
             reportedRef.current = plan.fingerprint;
             Sentry.captureException(error, {
                 tags: {
-                    error_boundary: 'auto_recovery',
+                    error_boundary: boundaryTag,
                     recovery_fingerprint: plan.fingerprint.slice(0, 64),
                     recovery_attempt: String(plan.attempts),
+                    recovery_mode: plan.mode,
                 },
             });
         }
@@ -145,7 +159,7 @@ export function useErrorBoundaryRecovery(
         }, AUTO_RESET_MS);
 
         return () => window.clearTimeout(softTimer);
-    }, [error, reset, homeHref]);
+    }, [error, reset, homeHref, boundaryTag]);
 
     return phase;
 }

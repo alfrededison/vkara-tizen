@@ -19,6 +19,7 @@ export const env = createEnv({
             process.env.NEXT_PUBLIC_SENTRY_REPLAYS_SESSION_SAMPLE_RATE,
         NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:
             process.env.NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE,
+        NEXT_PUBLIC_SENTRY_ENABLED: process.env.NEXT_PUBLIC_SENTRY_ENABLED,
         VKARA_EXPERIMENTS: process.env.VKARA_EXPERIMENTS,
         WHISPER_URL: process.env.WHISPER_URL,
         HF_TOKEN: process.env.HF_TOKEN,

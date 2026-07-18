@@ -24,7 +24,7 @@ Sentry.init({
         process.env.SENTRY_TRACES_SAMPLE_RATE,
         sentryEnvironment,
     ),
-    includeLocalVariables: true,
+    includeLocalVariables: sentryEnvironment === 'development',
     enableLogs: true,
     beforeSend: scrubSentryEvent,
 });

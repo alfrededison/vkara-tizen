@@ -20,7 +20,10 @@ const sentryEnvironment = readSentryEnvironmentFromProcess({
     preferPublic: true,
     runtimeHost: typeof window !== 'undefined' ? window.location.hostname : undefined,
 });
-const enabled = isSentryEnabled(dsn, process.env.SENTRY_ENABLED);
+const enabled = isSentryEnabled(
+    dsn,
+    process.env.NEXT_PUBLIC_SENTRY_ENABLED ?? process.env.SENTRY_ENABLED,
+);
 const release = resolveWebSentryRelease();
 
 Sentry.init({

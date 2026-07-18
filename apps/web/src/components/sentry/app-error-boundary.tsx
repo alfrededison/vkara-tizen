@@ -1,15 +1,10 @@
 'use client';
 
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useMemo } from 'react';
 import * as Sentry from '@sentry/nextjs';
 
 import { RecoveryShell } from '@/components/sentry/recovery-shell';
-import {
-    AUTO_RESET_MS,
-    HARD_RECOVER_MS,
-    clearErrorRecoveryState,
-    planRecoveryAttempt,
-} from '@/hooks/use-error-boundary-recovery';
+import { useErrorBoundaryRecovery } from '@/hooks/use-error-boundary-recovery';
 import { useI18n } from '@/locales/client';
 
 type FallbackProps = {
@@ -17,46 +12,23 @@ type FallbackProps = {
     resetError: () => void;
 };
 
+function toRecoverableError(error: unknown): Error & { digest?: string } {
+    if (error instanceof Error) {
+        return error;
+    }
+    return new Error(typeof error === 'string' ? error : 'Unknown render error');
+}
+
 function AutoRecoverFallback({ error, resetError }: FallbackProps) {
     const t = useI18n();
-    const [phase, setPhase] = useState<'retrying' | 'redirecting'>('retrying');
-
-    useEffect(() => {
-        const plan = planRecoveryAttempt(error);
-        Sentry.captureException(error, {
-            tags: {
-                error_boundary: 'react_tree',
-                recovery_attempt: String(plan.attempts),
-                recovery_mode: plan.mode,
-            },
-        });
-
-        if (plan.mode === 'hard') {
-            setPhase('redirecting');
-            const hardTimer = window.setTimeout(() => {
-                clearErrorRecoveryState();
-                window.location.replace('/');
-            }, HARD_RECOVER_MS);
-            return () => window.clearTimeout(hardTimer);
-        }
-
-        setPhase('retrying');
-        const softTimer = window.setTimeout(() => {
-            try {
-                resetError();
-            } catch {
-                setPhase('redirecting');
-                clearErrorRecoveryState();
-                window.location.replace('/');
-            }
-        }, AUTO_RESET_MS);
-
-        return () => window.clearTimeout(softTimer);
-    }, [error, resetError]);
+    const recoverable = useMemo(() => toRecoverableError(error), [error]);
+    const phase = useErrorBoundaryRecovery(recoverable, resetError, {
+        boundaryTag: 'react_tree',
+    });
 
     return (
         <RecoveryShell
-            phase={phase}
+            phase={phase === 'reporting' ? 'retrying' : phase}
             label={
                 phase === 'redirecting'
                     ? t('error.boundary.redirecting')
