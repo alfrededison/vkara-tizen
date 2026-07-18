@@ -134,7 +134,11 @@ export function resolveSentryTracesSampleRate(
     return sentryEnvironment === 'development' ? 1 : 0.1;
 }
 
-/** Session Replay: fraction of all sessions (client only). Default 1.0 development / 0.1 production. */
+/**
+ * Session Replay: fraction of all sessions (client only).
+ * Default 1.0 development / 0.01 production (error-triggered replays stay at 1.0).
+ * Prefer low continuous sampling in prod; debug via `replaysOnErrorSampleRate`.
+ */
 export function resolveSentryReplaysSessionSampleRate(
     raw: string | undefined,
     sentryEnvironment?: string,
@@ -146,7 +150,7 @@ export function resolveSentryReplaysSessionSampleRate(
             return parsed;
         }
     }
-    return sentryEnvironment === 'development' ? 1 : 0.1;
+    return sentryEnvironment === 'development' ? 1 : 0.01;
 }
 
 /** Session Replay: fraction of sessions with an error (client only). Default 1.0. */

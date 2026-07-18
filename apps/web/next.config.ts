@@ -57,4 +57,14 @@ export default withSentryConfig(withBundleAnalyzer(nextConfig), {
     // Proxy browser events through Next to reduce ad-blocker drops.
     tunnelRoute: '/monitoring',
     silent: !process.env.CI,
+    // Delete uploaded maps from `.next` so they are never served publicly.
+    sourcemaps: {
+        deleteSourcemapsAfterUpload: true,
+    },
+    // Annotate DOM with React component names for Replay / breadcrumbs search.
+    webpack: {
+        reactComponentAnnotation: {
+            enabled: true,
+        },
+    },
 });

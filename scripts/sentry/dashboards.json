@@ -352,15 +352,16 @@
       "title": "vkara — Web Client",
       "period": "24h",
       "projects": [4511749707792384],
-      "isFavorited": false,
-      "description": "Next.js client health: errors, page transactions, replay friction.",
+      "isFavorited": true,
+      "description": "Next.js frontend ops view: errors → Core Web Vitals → pageload/nav latency → top issues. Scan top row first.",
       "widgets": [
         {
-          "title": "Client errors",
+          "title": "Client errors (24h)",
+          "description": "Primary health pulse",
           "displayType": "big_number",
           "widgetType": "error-events",
           "interval": "5m",
-          "layout": { "x": 0, "y": 0, "w": 2, "h": 1, "minH": 1 },
+          "layout": { "x": 0, "y": 0, "w": 1, "h": 1, "minH": 1 },
           "queries": [
             {
               "name": "",
@@ -373,11 +374,84 @@
           ]
         },
         {
-          "title": "Page transactions",
+          "title": "Users affected",
+          "description": "Unique users hitting errors",
+          "displayType": "big_number",
+          "widgetType": "error-events",
+          "interval": "5m",
+          "layout": { "x": 1, "y": 0, "w": 1, "h": 1, "minH": 1 },
+          "queries": [
+            {
+              "name": "",
+              "fields": ["count_unique(user)"],
+              "aggregates": ["count_unique(user)"],
+              "columns": [],
+              "conditions": "",
+              "orderby": ""
+            }
+          ]
+        },
+        {
+          "title": "LCP p75 (ms)",
+          "description": "Largest Contentful Paint — loading",
           "displayType": "big_number",
           "widgetType": "spans",
           "interval": "5m",
-          "layout": { "x": 2, "y": 0, "w": 2, "h": 1, "minH": 1 },
+          "layout": { "x": 2, "y": 0, "w": 1, "h": 1, "minH": 1 },
+          "queries": [
+            {
+              "name": "",
+              "fields": ["p75(measurements.lcp)"],
+              "aggregates": ["p75(measurements.lcp)"],
+              "columns": [],
+              "conditions": "span.op:pageload",
+              "orderby": ""
+            }
+          ]
+        },
+        {
+          "title": "INP p75 (ms)",
+          "description": "Interaction to Next Paint — responsiveness",
+          "displayType": "big_number",
+          "widgetType": "spans",
+          "interval": "5m",
+          "layout": { "x": 3, "y": 0, "w": 1, "h": 1, "minH": 1 },
+          "queries": [
+            {
+              "name": "",
+              "fields": ["p75(measurements.inp)"],
+              "aggregates": ["p75(measurements.inp)"],
+              "columns": [],
+              "conditions": "has:measurements.inp",
+              "orderby": ""
+            }
+          ]
+        },
+        {
+          "title": "CLS p75",
+          "description": "Cumulative Layout Shift — stability",
+          "displayType": "big_number",
+          "widgetType": "spans",
+          "interval": "5m",
+          "layout": { "x": 4, "y": 0, "w": 1, "h": 1, "minH": 1 },
+          "queries": [
+            {
+              "name": "",
+              "fields": ["p75(measurements.cls)"],
+              "aggregates": ["p75(measurements.cls)"],
+              "columns": [],
+              "conditions": "span.op:pageload",
+              "orderby": ""
+            }
+          ]
+        },
+        {
+          "title": "Page transactions",
+          "description": "Client traffic volume",
+          "displayType": "big_number",
+          "widgetType": "spans",
+          "interval": "5m",
+          "layout": { "x": 5, "y": 0, "w": 1, "h": 1, "minH": 1 },
           "queries": [
             {
               "name": "",
@@ -390,24 +464,8 @@
           ]
         },
         {
-          "title": "Client error rate",
-          "displayType": "area",
-          "widgetType": "error-events",
-          "interval": "5m",
-          "layout": { "x": 4, "y": 0, "w": 2, "h": 1, "minH": 1 },
-          "queries": [
-            {
-              "name": "errors",
-              "fields": ["count()"],
-              "aggregates": ["count()"],
-              "columns": [],
-              "conditions": "",
-              "orderby": ""
-            }
-          ]
-        },
-        {
           "title": "Client errors over time",
+          "description": "Spikes vs steady burn",
           "displayType": "area",
           "widgetType": "error-events",
           "interval": "5m",
@@ -424,33 +482,126 @@
           ]
         },
         {
-          "title": "Frontend transaction p95",
+          "title": "Web Vitals over time",
+          "description": "LCP / INP / CLS trends",
           "displayType": "line",
           "widgetType": "spans",
           "interval": "5m",
           "layout": { "x": 3, "y": 1, "w": 3, "h": 2, "minH": 2 },
-          "limit": 5,
+          "queries": [
+            {
+              "name": "LCP p75",
+              "fields": ["p75(measurements.lcp)"],
+              "aggregates": ["p75(measurements.lcp)"],
+              "columns": [],
+              "conditions": "span.op:pageload",
+              "orderby": ""
+            },
+            {
+              "name": "INP p75",
+              "fields": ["p75(measurements.inp)"],
+              "aggregates": ["p75(measurements.inp)"],
+              "columns": [],
+              "conditions": "has:measurements.inp",
+              "orderby": ""
+            },
+            {
+              "name": "CLS p75",
+              "fields": ["p75(measurements.cls)"],
+              "aggregates": ["p75(measurements.cls)"],
+              "columns": [],
+              "conditions": "span.op:pageload",
+              "orderby": ""
+            }
+          ]
+        },
+        {
+          "title": "Pageload p95 by route",
+          "description": "Slowest first paints",
+          "displayType": "table",
+          "widgetType": "spans",
+          "interval": "5m",
+          "layout": { "x": 0, "y": 3, "w": 3, "h": 3, "minH": 2 },
+          "limit": 10,
           "queries": [
             {
               "name": "",
-              "fields": ["p95(span.duration)"],
-              "aggregates": ["p95(span.duration)"],
+              "fields": ["transaction", "p95(span.duration)", "count()"],
+              "aggregates": ["p95(span.duration)", "count()"],
               "columns": ["transaction"],
-              "conditions": "is_transaction:true",
+              "conditions": "is_transaction:true span.op:pageload",
               "orderby": "-p95(span.duration)"
             }
           ]
         },
         {
-          "title": "Top client issues",
+          "title": "Navigation p95 by route",
+          "description": "App Router client transitions",
           "displayType": "table",
-          "widgetType": "issue",
+          "widgetType": "spans",
           "interval": "5m",
-          "layout": { "x": 0, "y": 3, "w": 6, "h": 3, "minH": 2 },
+          "layout": { "x": 3, "y": 3, "w": 3, "h": 3, "minH": 2 },
+          "limit": 10,
           "queries": [
             {
               "name": "",
-              "fields": ["issue", "title", "culprit", "count()", "last_seen()"],
+              "fields": ["transaction", "p95(span.duration)", "count()"],
+              "aggregates": ["p95(span.duration)", "count()"],
+              "columns": ["transaction"],
+              "conditions": "is_transaction:true span.op:navigation",
+              "orderby": "-p95(span.duration)"
+            }
+          ]
+        },
+        {
+          "title": "Errors by browser",
+          "description": "Where clients break",
+          "displayType": "table",
+          "widgetType": "error-events",
+          "interval": "5m",
+          "layout": { "x": 0, "y": 6, "w": 3, "h": 2, "minH": 2 },
+          "limit": 8,
+          "queries": [
+            {
+              "name": "",
+              "fields": ["browser.name", "count()", "count_unique(user)"],
+              "aggregates": ["count()", "count_unique(user)"],
+              "columns": ["browser.name"],
+              "conditions": "has:browser.name",
+              "orderby": "-count()"
+            }
+          ]
+        },
+        {
+          "title": "Errors by release",
+          "description": "Regressions after deploy",
+          "displayType": "table",
+          "widgetType": "error-events",
+          "interval": "5m",
+          "layout": { "x": 3, "y": 6, "w": 3, "h": 2, "minH": 2 },
+          "limit": 8,
+          "queries": [
+            {
+              "name": "",
+              "fields": ["release", "count()", "count_unique(user)"],
+              "aggregates": ["count()", "count_unique(user)"],
+              "columns": ["release"],
+              "conditions": "has:release",
+              "orderby": "-count()"
+            }
+          ]
+        },
+        {
+          "title": "Top unresolved client issues",
+          "description": "Click through to Replay + stack",
+          "displayType": "table",
+          "widgetType": "issue",
+          "interval": "5m",
+          "layout": { "x": 0, "y": 8, "w": 6, "h": 3, "minH": 2 },
+          "queries": [
+            {
+              "name": "",
+              "fields": ["issue", "title", "culprit", "count()", "user_count()", "last_seen()"],
               "aggregates": [],
               "columns": [],
               "conditions": "is:unresolved",

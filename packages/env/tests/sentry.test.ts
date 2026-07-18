@@ -71,7 +71,7 @@ describe('resolveSentryTracesSampleRate', () => {
 describe('replay sample rates', () => {
     it('uses env-aware session defaults', () => {
         expect(resolveSentryReplaysSessionSampleRate(undefined, 'development')).toBe(1);
-        expect(resolveSentryReplaysSessionSampleRate(undefined, 'production')).toBe(0.1);
+        expect(resolveSentryReplaysSessionSampleRate(undefined, 'production')).toBe(0.01);
         expect(resolveSentryReplaysOnErrorSampleRate(undefined)).toBe(1);
     });
 });
