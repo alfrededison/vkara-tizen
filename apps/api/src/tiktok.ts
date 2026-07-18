@@ -4,6 +4,7 @@ import { closeSharedTikTokPool, getSharedTikTokPool } from '@vkara/tiktok/browse
 import { toQueueVideo } from '@vkara/tiktok';
 
 import { createContextLogger } from '@/utils/logger';
+import { captureUnexpected } from '@/sentry';
 
 const logger = createContextLogger('TikTok-Search');
 
@@ -39,6 +40,10 @@ export const searchTiktokElysia = new Elysia({ prefix: '/tiktok' }).post(
             };
         } catch (error) {
             logger.error('TikTok search failed', { keyword, error });
+            captureUnexpected(error, {
+                tags: { area: 'tiktok', route: 'search', kind: 'upstream' },
+                level: 'warning',
+            });
             return status(502, {
                 error: error instanceof Error ? error.message : 'TikTok search failed',
             });

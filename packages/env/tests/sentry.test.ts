@@ -1,12 +1,53 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    isSentryCronMonitorAllowed,
     isSentryEnabled,
+    resolveSentryCronMonitorSlugs,
+    resolveSentryEnvironment,
     resolveSentryLogLevels,
     resolveSentryReplaysOnErrorSampleRate,
     resolveSentryReplaysSessionSampleRate,
     resolveSentryTracesSampleRate,
 } from '../src/sentry';
+
+describe('resolveSentryEnvironment', () => {
+    it('honors explicit development / production (and aliases)', () => {
+        expect(resolveSentryEnvironment({ explicit: 'production' })).toBe('production');
+        expect(resolveSentryEnvironment({ explicit: 'prod' })).toBe('production');
+        expect(resolveSentryEnvironment({ explicit: 'development' })).toBe('development');
+        expect(resolveSentryEnvironment({ explicit: 'dev' })).toBe('development');
+        expect(resolveSentryEnvironment({ explicit: 'preview' })).toBe('development');
+    });
+
+    it('maps Vercel production and vkara.vercel.app to production', () => {
+        expect(resolveSentryEnvironment({ vercelEnv: 'production' })).toBe('production');
+        expect(resolveSentryEnvironment({ vercelUrl: 'vkara.vercel.app' })).toBe('production');
+        expect(
+            resolveSentryEnvironment({ appUrl: 'https://vkara.vercel.app' }),
+        ).toBe('production');
+        expect(resolveSentryEnvironment({ runtimeHost: 'vkara.vercel.app' })).toBe('production');
+        expect(resolveSentryEnvironment({ runtimeHost: 'www.vkara.vercel.app' })).toBe(
+            'production',
+        );
+    });
+
+    it('defaults local / preview to development', () => {
+        expect(resolveSentryEnvironment({})).toBe('development');
+        expect(resolveSentryEnvironment({ vercelEnv: 'preview' })).toBe('development');
+        expect(resolveSentryEnvironment({ appUrl: 'http://localhost:3000' })).toBe('development');
+    });
+
+    it('lets explicit override host detection', () => {
+        expect(
+            resolveSentryEnvironment({
+                explicit: 'development',
+                vercelEnv: 'production',
+                appUrl: 'https://vkara.vercel.app',
+            }),
+        ).toBe('development');
+    });
+});
 
 describe('resolveSentryTracesSampleRate', () => {
     it('defaults to 1 in development and 0.1 otherwise', () => {
@@ -28,8 +69,9 @@ describe('resolveSentryTracesSampleRate', () => {
 });
 
 describe('replay sample rates', () => {
-    it('uses production-friendly defaults', () => {
-        expect(resolveSentryReplaysSessionSampleRate(undefined)).toBe(0.1);
+    it('uses env-aware session defaults', () => {
+        expect(resolveSentryReplaysSessionSampleRate(undefined, 'development')).toBe(1);
+        expect(resolveSentryReplaysSessionSampleRate(undefined, 'production')).toBe(0.1);
         expect(resolveSentryReplaysOnErrorSampleRate(undefined)).toBe(1);
     });
 });
@@ -63,5 +105,25 @@ describe('resolveSentryLogLevels', () => {
 
     it('parses an explicit allow-list', () => {
         expect(resolveSentryLogLevels('error, warn, nope', 'production')).toEqual(['error', 'warn']);
+    });
+});
+
+describe('resolveSentryCronMonitorSlugs', () => {
+    it('defaults to the free-plan-safe room-cleanup slug', () => {
+        expect(resolveSentryCronMonitorSlugs(undefined)).toEqual(new Set(['room-cleanup']));
+        expect(isSentryCronMonitorAllowed('room-cleanup', new Set(['room-cleanup']))).toBe(true);
+        expect(isSentryCronMonitorAllowed('search-instance-cleanup', new Set(['room-cleanup']))).toBe(
+            false,
+        );
+    });
+
+    it('supports all / none / explicit lists', () => {
+        expect(resolveSentryCronMonitorSlugs('*')).toBe('all');
+        expect(resolveSentryCronMonitorSlugs('all')).toBe('all');
+        expect(resolveSentryCronMonitorSlugs('none')).toEqual(new Set());
+        expect(resolveSentryCronMonitorSlugs('room-cleanup, service-hourly-report')).toEqual(
+            new Set(['room-cleanup', 'service-hourly-report']),
+        );
+        expect(isSentryCronMonitorAllowed('any', 'all')).toBe(true);
     });
 });

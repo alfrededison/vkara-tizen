@@ -7,12 +7,19 @@ import { createRedisOptions } from '@vkara/redis';
 import { env } from '@/env';
 import { pruneStaleParticipants } from '@/modules/room/participant-policy';
 import { recordOrphanedClientsRemoved, recordRoomReleased } from '@/modules/stats/service-stats';
+import {
+    attachWorkerFailureCapture,
+    captureUnexpected,
+    watchRedisClient,
+    withCronMonitor,
+} from '@/sentry';
 import { closeRoom, wsConnections } from '@/server';
 import { createContextLogger } from '@/utils/logger';
 import { loadRoom, mutateRoom, scanRedisKeys } from '@/utils/room-store';
 
 const EMPTY_ROOM_TIMEOUT = env.EMPTY_ROOM_TIMEOUT * 1000;
 const ORPHANED_CLIENT_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
+const CLEANUP_CRON = '*/10 * * * *';
 
 const logger = createContextLogger('Queue/Cleanup');
 
@@ -21,7 +28,7 @@ const connectionOptions = createRedisOptions({
     REDIS_PORT: String(env.REDIS_PORT),
     REDIS_PASSWORD: env.REDIS_PASSWORD,
 });
-const connection = new Redis(connectionOptions);
+const connection = watchRedisClient(new Redis(connectionOptions), 'queue-cleanup');
 
 // Create the cleanup queue
 export const cleanupQueue = new Queue('room-cleanup', {
@@ -38,10 +45,23 @@ export const cleanupQueue = new Queue('room-cleanup', {
 });
 
 // Create a worker to process cleanup jobs
-const worker = new Worker('room-cleanup', async () => await cleanupInactiveRooms(), {
-    connection: connectionOptions,
-    concurrency: 1,
-});
+const worker = new Worker(
+    'room-cleanup',
+    async () =>
+        withCronMonitor(
+            {
+                slug: 'room-cleanup',
+                crontab: CLEANUP_CRON,
+                checkinMarginMinutes: 5,
+                maxRuntimeMinutes: 10,
+            },
+            () => cleanupInactiveRooms(),
+        ),
+    {
+        connection: connectionOptions,
+        concurrency: 1,
+    },
+);
 
 // Handle worker events
 worker.on('completed', (job) => {
@@ -55,6 +75,8 @@ worker.on('failed', (job, error) => {
         stack: error.stack,
     });
 });
+
+attachWorkerFailureCapture(worker, { queue: 'room-cleanup', area: 'queue' });
 
 function getConnectedClientIds(room: Room): string[] {
     return (room.clients || []).filter((clientId) => wsConnections.has(clientId));
@@ -161,6 +183,10 @@ async function cleanupInactiveRooms() {
             recordRoomReleased();
         } catch (error) {
             logger.error(`Failed to process room ${key}`, { error });
+            captureUnexpected(error, {
+                tags: { area: 'queue', queue: 'room-cleanup', op: 'room' },
+                extras: { roomKey: key },
+            });
         }
     }
 
@@ -212,7 +238,7 @@ export async function scheduleCleanupJobs() {
             {},
             {
                 repeat: {
-                    pattern: '*/10 * * * *', // Every 10 minutes
+                    pattern: CLEANUP_CRON,
                 },
             },
         );

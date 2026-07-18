@@ -25,6 +25,7 @@
         "@elysiajs/cors": "^1.4.2",
         "@elysiajs/openapi": "^1.4.2",
         "@elysiajs/server-timing": "^1.4.1",
+        "@sentry/bun": "^10.66.0",
         "@sentry/elysia": "^10.66.0",
         "@t3-oss/env-core": "^0.13.10",
         "@vkara/cache-redis": "workspace:*",

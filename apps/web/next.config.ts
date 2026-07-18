@@ -15,6 +15,12 @@ const nextConfig: NextConfig = {
         '@vkara/personalization',
         '@vkara/curated-playlists',
     ],
+    // Expose Vercel system env to the browser bundle so Sentry can tag
+    // `production` on vkara.vercel.app without a manual NEXT_PUBLIC_SENTRY_ENVIRONMENT.
+    env: {
+        NEXT_PUBLIC_VERCEL_ENV: process.env.VERCEL_ENV ?? '',
+        NEXT_PUBLIC_VERCEL_URL: process.env.VERCEL_URL ?? '',
+    },
     output: 'standalone',
     // Trace deps from monorepo root — avoids bloated standalone node_modules.
     outputFileTracingRoot: path.join(__dirname, '../..'),

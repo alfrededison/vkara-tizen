@@ -5,7 +5,7 @@ import * as Sentry from '@sentry/elysia';
 
 import { env } from '@/env';
 import { parseEnvFlagValue } from '@vkara/env/base';
-import { isSentryEnabled, resolveSentryLogLevels } from '@vkara/env/sentry';
+import * as VkSentryEnv from '@vkara/env/sentry';
 
 const LOG_TO_FILES = parseEnvFlagValue(env.LOG_TO_FILES, false);
 const ERROR_LOG_PATH = env.ERROR_LOG_PATH;
@@ -108,8 +108,10 @@ if (LOG_TO_FILES) {
     }
 }
 
-if (isSentryEnabled(env.SENTRY_DSN, env.SENTRY_ENABLED) && Sentry.isInitialized()) {
-    const levels = resolveSentryLogLevels(env.SENTRY_LOG_LEVELS, env.NODE_ENV);
+if (VkSentryEnv.isSentryEnabled(env.SENTRY_DSN, env.SENTRY_ENABLED) && Sentry.isInitialized()) {
+    // Namespace import avoids HMR/TDZ "is not defined" on named bindings.
+    const sentryEnvironment = VkSentryEnv.readSentryEnvironmentFromProcess();
+    const levels = VkSentryEnv.resolveSentryLogLevels(env.SENTRY_LOG_LEVELS, sentryEnvironment);
     const SentryWinstonTransport = Sentry.createSentryWinstonTransport(Transport, {
         levels,
     });
@@ -117,7 +119,7 @@ if (isSentryEnabled(env.SENTRY_DSN, env.SENTRY_ENABLED) && Sentry.isInitialized(
     transports.push(
         new SentryWinstonTransport({
             // Skip calling the transport for noisier levels Winston-side.
-            level: isProduction ? 'warn' : 'info',
+            level: sentryEnvironment === 'production' ? 'warn' : 'info',
             format: sentryAttributesFormat,
         }),
     );

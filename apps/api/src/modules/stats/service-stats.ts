@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/elysia';
+
 import { createContextLogger } from '@/utils/logger';
 import { relatedInstances, searchInstances } from '@/modules/youtube/cache';
 
@@ -116,6 +118,16 @@ export function emitHourlyReport(snapshot: {
         topSearches,
         latestSearches: latest,
     });
+
+    if (Sentry.isInitialized() && Sentry.isEnabled()) {
+        Sentry.metrics.gauge('vkara.rooms.total', snapshot.totalRooms);
+        Sentry.metrics.gauge('vkara.rooms.active', snapshot.activeRooms);
+        Sentry.metrics.gauge('vkara.ws.connections', snapshot.connectedClients);
+        Sentry.metrics.gauge('vkara.clients.records', snapshot.totalClientRecords);
+        Sentry.metrics.count('vkara.youtube.search_requests', hourly.searchRequests);
+        Sentry.metrics.count('vkara.youtube.related_requests', hourly.relatedRequests);
+        Sentry.metrics.count('vkara.cleanup.rooms_released', hourly.roomsReleased);
+    }
 
     resetHourlyCounters();
 }
