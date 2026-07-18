@@ -15,6 +15,12 @@ import { createRedisOptions } from '@vkara/redis';
 import { env } from './env';
 
 import { recordRelatedRequest, recordSearchRequest } from '@/modules/stats/service-stats';
+import {
+    attachWorkerFailureCapture,
+    captureUnexpected,
+    watchRedisClient,
+    withCronMonitor,
+} from '@/sentry';
 import { createContextLogger } from '@/utils/logger';
 import {
     cleanupOldInstances,
@@ -44,20 +50,29 @@ const youtubeiLogger = createContextLogger('Queue/Youtubei');
 
 const youtubei = getYoutubeiClient();
 
+const YOUTUBEI_CLEANUP_CRON = '*/5 * * * *';
+
 const redisConnectionOptions = createRedisOptions({
     REDIS_HOST: env.REDIS_HOST,
     REDIS_PORT: String(env.REDIS_PORT),
     REDIS_PASSWORD: env.REDIS_PASSWORD,
 });
-const redis = new Redis(redisConnectionOptions);
+const redis = watchRedisClient(new Redis(redisConnectionOptions), 'youtubei');
 
 const cleanupQueue = new Queue('search-instance-cleanup', { connection: redisConnectionOptions });
 
 const worker = new Worker(
     'search-instance-cleanup',
-    async () => {
-        await cleanupOldInstances();
-    },
+    async () =>
+        withCronMonitor(
+            {
+                slug: 'search-instance-cleanup',
+                crontab: YOUTUBEI_CLEANUP_CRON,
+                checkinMarginMinutes: 5,
+                maxRuntimeMinutes: 5,
+            },
+            () => cleanupOldInstances(),
+        ),
     { connection: redisConnectionOptions },
 );
 
@@ -73,13 +88,15 @@ worker.on('failed', (job, error) => {
     });
 });
 
+attachWorkerFailureCapture(worker, { queue: 'search-instance-cleanup', area: 'youtube' });
+
 const scheduleCleanupYoutubeiInstance = async () => {
     await cleanupQueue.add(
         'cleanup',
         {},
         {
             repeat: {
-                pattern: '*/5 * * * *',
+                pattern: YOUTUBEI_CLEANUP_CRON,
             },
         },
     );
@@ -98,7 +115,12 @@ const collectUniqueNewItems = (
 export const searchYoutubeiElysia = new Elysia({})
     .onStart(() => {
         logger.info('Starting search-youtubei');
-        scheduleCleanupYoutubeiInstance().catch(youtubeiLogger.error);
+        scheduleCleanupYoutubeiInstance().catch((error) => {
+            youtubeiLogger.error('Failed to schedule youtubei cleanup', { error });
+            captureUnexpected(error, {
+                tags: { area: 'youtube', op: 'schedule', queue: 'search-instance-cleanup' },
+            });
+        });
     })
     .state('youtubeiClient', youtubei)
     .state('redisClient', redis)
@@ -175,6 +197,11 @@ export const searchYoutubeiElysia = new Elysia({})
                 };
             } catch (error) {
                 logger.error('Failed to search YouTube', { error, query, continuation });
+                captureUnexpected(error, {
+                    tags: { area: 'youtube', route: 'search', kind: 'upstream' },
+                    level: 'warning',
+                    extras: { hasContinuation: Boolean(continuation) },
+                });
                 return status(502, { error: 'youtube_upstream_failed' });
             }
         },
@@ -189,6 +216,10 @@ export const searchYoutubeiElysia = new Elysia({})
                 return await fetchSearchSuggestions(query);
             } catch (error) {
                 logger.error('Failed to get search suggestions', { error, query });
+                captureUnexpected(error, {
+                    tags: { area: 'youtube', route: 'suggestions', kind: 'upstream' },
+                    level: 'warning',
+                });
                 return status(502, { error: 'youtube_upstream_failed' });
             }
         },
@@ -296,6 +327,10 @@ export const searchYoutubeiElysia = new Elysia({})
                 };
             } catch (error) {
                 logger.error('Failed to get related videos', { error });
+                captureUnexpected(error, {
+                    tags: { area: 'youtube', route: 'related', kind: 'upstream' },
+                    level: 'warning',
+                });
                 return status(502, { error: 'youtube_upstream_failed' });
             }
         },

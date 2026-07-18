@@ -5,6 +5,7 @@ export * from './flags';
 export * from './logger';
 export * from './playwright-proxy';
 export * from './redis';
+export * from './sentry';
 export * from './server';
 export * from './tls';
 export * from './web-public';

@@ -14,6 +14,7 @@
         "./embed": "./src/embed.ts",
         "./redis": "./src/redis.ts",
         "./server": "./src/server.ts",
+        "./sentry": "./src/sentry.ts",
         "./logger": "./src/logger.ts",
         "./web-public": "./src/web-public.ts",
         "./web-server": "./src/web-server.ts",

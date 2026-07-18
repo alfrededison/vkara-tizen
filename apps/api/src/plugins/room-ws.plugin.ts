@@ -3,6 +3,7 @@ import type { ElysiaWS } from 'elysia/ws';
 import { isCorsOriginAllowed, resolveWsUpgradeCorsHeaders } from '@vkara/env/server';
 
 import { createRoomService, type RoomService } from '@/modules/room/room-service';
+import { captureUnexpected } from '@/sentry';
 import { RoomError, type ServerMessage } from '@vkara/room';
 import { wsClientMessageSchema } from '@vkara/validators/ws/client-message';
 import { wsLogger, createContextLogger } from '@/utils/logger';
@@ -28,6 +29,11 @@ function handleWsError(
             code: error.code,
             message: error.message,
         });
+        // INTERNAL_ERROR is a real bug — still open an Issue.
+        captureUnexpected(error, {
+            tags: { area: 'ws', op: 'message' },
+            extras: { clientId: ws.id, roomErrorCode: error.code },
+        });
         return;
     }
 
@@ -35,6 +41,10 @@ function handleWsError(
     pluginLogger.error('Unexpected WebSocket error', {
         error,
         clientId: ws.id,
+    });
+    captureUnexpected(error, {
+        tags: { area: 'ws', op: 'message' },
+        extras: { clientId: ws.id },
     });
 }
 
@@ -75,6 +85,10 @@ export const createRoomWsPlugin = ({
                 wsLogger.error('Error during client disconnect cleanup', {
                     clientId: ws.id,
                     error,
+                });
+                captureUnexpected(error, {
+                    tags: { area: 'ws', op: 'disconnect' },
+                    extras: { clientId: ws.id },
                 });
             } finally {
                 wsConnections.delete(ws.id);

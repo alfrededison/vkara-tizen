@@ -409,6 +409,16 @@ export default {
     'tvPage.autoPlayLabel': 'Tự động phát tiếp',
     'tvPage.nextUpActions': 'Tùy chọn bài tiếp theo',
 
+    'error.boundary.title': 'Đã xảy ra lỗi',
+    'error.boundary.description':
+        'Chúng tôi đã ghi nhận lỗi để sửa. Bạn có thể thử lại hoặc về trang chủ.',
+    'error.boundary.retry': 'Thử lại',
+    'error.boundary.home': 'Về trang chủ',
+    'error.boundary.digest': 'Mã {digest}',
+    'error.boundary.reporting': 'Đang ghi nhận lỗi…',
+    'error.boundary.retrying': 'Đang tự khôi phục…',
+    'error.boundary.redirecting': 'Đang đưa bạn về trang chính…',
+
     'seo.title': 'vkara - Hát karaoke cùng nhau trực tuyến',
     'seo.description':
         'vkara là ứng dụng hát karaoke trực tuyến miễn phí. Tạo phòng, mời bạn bè và hát cùng nhau mọi lúc mọi nơi qua YouTube.',

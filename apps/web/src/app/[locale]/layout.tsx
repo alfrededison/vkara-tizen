@@ -16,6 +16,8 @@ import { ActionFeedbackHost } from '@/components/action-feedback';
 import { Toaster } from '@/components/ui/toaster';
 import { ExperimentsProviderReconciliation } from '@/components/experiments-provider-reconciliation';
 import { ServiceWorkerCleanup } from '@/components/service-worker-cleanup';
+import { SentryContextSync } from '@/components/sentry/sentry-context-sync';
+import { AppErrorBoundary } from '@/components/sentry/app-error-boundary';
 import { JsonLd } from '@/components/seo/json-ld';
 import { isAppLocale, type AppLocale } from '@/lib/locale-path';
 import { env } from '@/env';
@@ -101,9 +103,10 @@ export default async function RootLayout({
                     <I18nProvider locale={appLocale}>
                         <Suspense fallback={null}>
                             <WebSocketProvider>
+                                <SentryContextSync />
                                 <ServiceWorkerCleanup />
                                 <ExperimentsProviderReconciliation />
-                                {children}
+                                <AppErrorBoundary>{children}</AppErrorBoundary>
                                 <ActionFeedbackHost />
                                 <Toaster />
                             </WebSocketProvider>

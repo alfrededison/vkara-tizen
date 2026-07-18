@@ -414,6 +414,16 @@ export default {
     'tvPage.autoPlayLabel': 'Auto-playing next',
     'tvPage.nextUpActions': 'Up next options',
 
+    'error.boundary.title': 'Something went wrong',
+    'error.boundary.description':
+        'We logged the error so we can fix it. You can try again or go back home.',
+    'error.boundary.retry': 'Try again',
+    'error.boundary.home': 'Go home',
+    'error.boundary.digest': 'Ref {digest}',
+    'error.boundary.reporting': 'Reporting the issue…',
+    'error.boundary.retrying': 'Recovering automatically…',
+    'error.boundary.redirecting': 'Taking you back…',
+
     'seo.title': 'vkara - Sing karaoke together online',
     'seo.description':
         'vkara is a free online karaoke app. Create a room, invite friends, and sing together anytime with YouTube videos.',

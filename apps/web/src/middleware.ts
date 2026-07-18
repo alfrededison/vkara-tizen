@@ -1,5 +1,6 @@
 import { createI18nMiddleware } from 'next-international/middleware';
 import { NextRequest, NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 
 import { env } from '@/env';
 import { APP_LOCALES, DEFAULT_APP_LOCALE, LOCALE_COOKIE_NAME } from '@/lib/locale-path';
@@ -18,7 +19,7 @@ const I18nMiddleware = createI18nMiddleware({
  * Skip redirect on internal Next.js subrequests (RSC, prefetch, middleware rewrite).
  * AIO image also handles /vi at the Caddy edge.
  */
-export function middleware(request: NextRequest) {
+function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
     const isInternalSubrequest =
         request.headers.has('rsc') ||
@@ -71,6 +72,8 @@ export function middleware(request: NextRequest) {
     return response;
 }
 
+export default Sentry.wrapMiddlewareWithSentry(middleware);
+
 export const config = {
-    matcher: ['/((?!api|static|.*\\..*|_next|favicon.ico|robots.txt|icons).*)'],
+    matcher: ['/((?!api|static|monitoring|.*\\..*|_next|favicon.ico|robots.txt|icons).*)'],
 };

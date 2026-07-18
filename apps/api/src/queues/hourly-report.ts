@@ -6,6 +6,11 @@ import { createRedisOptions } from '@vkara/redis';
 
 import { env } from '@/env';
 import { emitHourlyReport } from '@/modules/stats/service-stats';
+import {
+    attachWorkerFailureCapture,
+    watchRedisClient,
+    withCronMonitor,
+} from '@/sentry';
 import { wsConnections } from '@/server';
 import { createContextLogger } from '@/utils/logger';
 import { scanRedisKeys } from '@/utils/room-store';
@@ -20,7 +25,7 @@ const connectionOptions = createRedisOptions({
     REDIS_PASSWORD: env.REDIS_PASSWORD,
 });
 
-const connection = new Redis(connectionOptions);
+const connection = watchRedisClient(new Redis(connectionOptions), 'queue-hourly-report');
 
 export const hourlyReportQueue = new Queue('service-hourly-report', {
     connection: connectionOptions,
@@ -37,10 +42,19 @@ export const hourlyReportQueue = new Queue('service-hourly-report', {
 
 const worker = new Worker(
     'service-hourly-report',
-    async () => {
-        const snapshot = await collectServiceSnapshot();
-        emitHourlyReport(snapshot);
-    },
+    async () =>
+        withCronMonitor(
+            {
+                slug: 'service-hourly-report',
+                crontab: REPORT_CRON_PATTERN,
+                checkinMarginMinutes: 10,
+                maxRuntimeMinutes: 10,
+            },
+            async () => {
+                const snapshot = await collectServiceSnapshot();
+                emitHourlyReport(snapshot);
+            },
+        ),
     {
         connection: connectionOptions,
         concurrency: 1,
@@ -59,6 +73,7 @@ worker.on('failed', (job, error) => {
     });
 });
 
+attachWorkerFailureCapture(worker, { queue: 'service-hourly-report', area: 'queue' });
 async function collectServiceSnapshot() {
     const roomKeys = await scanRedisKeys('room:*');
     let activeRooms = 0;
