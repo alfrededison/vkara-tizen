@@ -38,5 +38,11 @@ export function isExperimentsEnabledOnWeb(env: ExperimentsEnvValues): boolean {
     if (env.NEXT_PUBLIC_VKARA_EXPERIMENTS !== undefined) {
         return parseEnvFlagValue(env.NEXT_PUBLIC_VKARA_EXPERIMENTS, false);
     }
+    // In the browser the server-only flag is unreachable — t3-env throws on
+    // any client access to a server key — so default off there instead of
+    // falling through to it.
+    if (typeof window !== 'undefined') {
+        return false;
+    }
     return isExperimentsEnabled(env);
 }

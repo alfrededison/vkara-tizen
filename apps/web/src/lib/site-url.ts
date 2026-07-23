@@ -7,7 +7,9 @@ export function getSiteUrl(): URL {
         return new URL(fromEnv.endsWith('/') ? fromEnv : `${fromEnv}/`);
     }
 
-    const vercel = env.VERCEL_URL?.trim();
+    // VERCEL_URL is a server-only key; t3-env throws if a client component
+    // ever reaches this fallback, so only consult it on the server.
+    const vercel = typeof window === 'undefined' ? env.VERCEL_URL?.trim() : undefined;
     if (vercel) {
         return new URL(`https://${vercel}/`);
     }
