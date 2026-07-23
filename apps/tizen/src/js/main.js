@@ -85,9 +85,16 @@ function launch() {
         showError('vkara is taking too long to load.');
     }, HANDOFF_TIMEOUT_MS);
 
+    // Cache-bust the HTML document: the Tizen app's private browser cache
+    // survives app restarts and the old engine won't reliably revalidate,
+    // so without this a web redeploy doesn't show up until the app is
+    // reinstalled (which wipes that cache). Hashed /_next/static assets
+    // keep caching normally, so launches stay fast.
+    var url = APP_URL + (APP_URL.indexOf('?') === -1 ? '?' : '&') + 'launch=' + Date.now();
+
     // replace() keeps history length at 1, so BACK on the remote exits the
     // app instead of returning to this splash page.
-    window.location.replace(APP_URL);
+    window.location.replace(url);
 }
 
 /* ---------- Remote key handling (only while this page is showing) ---------- */
