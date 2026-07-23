@@ -1,0 +1,9 @@
+{
+    "name": "@vkara/tizen",
+    "version": "0.0.0",
+    "license": "MIT",
+    "private": true,
+    "scripts": {
+        "build:wgt": "bash scripts/build-wgt.sh"
+    }
+}

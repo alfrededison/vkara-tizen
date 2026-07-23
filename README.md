@@ -227,7 +227,8 @@ Optional voice search: [Whisper STT](containers/whisper-stt/README.md).
 vkara/
 ├── apps/
 │   ├── web/                 frontend
-│   └── api/                 backend
+│   ├── api/                 backend
+│   └── tizen/               Samsung TV app (WGT shell, Tizen 6.5+ / 2022+ models)
 ├── packages/
 │   ├── env/                 t3-env + feature flags
 │   ├── validators/          zod WS + HTTP schemas

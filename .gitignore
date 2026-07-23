@@ -3,3 +3,7 @@ node_modules
 .DS_Store
 .venv
 .env.sentry-build-plugin
+
+# Tizen packaging output / leftovers
+dist/
+.manifest.tmp

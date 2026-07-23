@@ -19,6 +19,7 @@
         "dev:web": "turbo run dev --filter='@vkara/web'",
         "dev:api": "turbo run dev --filter='@vkara/api'",
         "build:web": "turbo run build --filter='@vkara/web'",
+        "build:tizen": "cd apps/tizen && bun run build:wgt",
         "build:api": "turbo run build --filter='@vkara/api'",
         "lint": "turbo run lint",
         "lint:fix": "turbo run lint:fix",
