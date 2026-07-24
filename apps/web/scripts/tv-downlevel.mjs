@@ -15,11 +15,12 @@
  * Runs as part of `bun run build` (see package.json). Skip with
  * TV_DOWNLEVEL=0.
  */
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transform } from 'esbuild';
+import { collectFiles } from './lib/collect-files.mjs';
 
 const TARGET = process.env.TV_CHROME_TARGET || 'chrome85';
 
@@ -34,19 +35,6 @@ if (process.env.TV_DOWNLEVEL === '0') {
 if (!existsSync(staticDir)) {
     console.error(`[tv-downlevel] ${staticDir} not found — run \`next build\` first`);
     process.exit(1);
-}
-
-async function collectFiles(dir, ext) {
-    const out = [];
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            out.push(...(await collectFiles(full, ext)));
-        } else if (entry.name.endsWith(ext)) {
-            out.push(full);
-        }
-    }
-    return out;
 }
 
 /**

@@ -11,11 +11,12 @@
  *
  * Run after a build: `bun scripts/tv-verify.mjs`
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
+import { collectFiles } from './lib/collect-files.mjs';
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const staticDir = path.join(webRoot, '.next', 'static');
@@ -23,19 +24,6 @@ const staticDir = path.join(webRoot, '.next', 'static');
 if (!existsSync(staticDir)) {
     console.error(`[tv-verify] ${staticDir} not found — run \`bun run build\` first`);
     process.exit(1);
-}
-
-async function collectFiles(dir, ext) {
-    const out = [];
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            out.push(...(await collectFiles(full, ext)));
-        } else if (entry.name.endsWith(ext)) {
-            out.push(full);
-        }
-    }
-    return out;
 }
 
 const problems = [];
